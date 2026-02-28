@@ -87,7 +87,7 @@ sys = ss(A,B,C,D);
 % Input
 vel = 2;                            % Longitudinal speed of the car [m/s]
 lon_pos = vel*time;                 % Longitudinal position of the car [m]
-u_vet = interp1(X_r,Z_r,lon_pos)';
+u_vet = interp1(X_r,Z_r,lon_pos)';%-- 14.02.2026, 18:10 --%
  
 [y,time,x] = lsim(sys,u_vet,time);
  
