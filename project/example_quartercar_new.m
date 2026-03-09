@@ -1,0 +1,64 @@
+close all; clear all; clc;
+delay = 5;
+%% create model
+model_quatercar_bd;
+%% design controller(s)
+
+%% design controllers:
+q1 = 1e5;  % Weight for body travel
+q2 = 1e2;  % Weight for body velocity
+q3 = 1e5;  % Weight for wheel travel
+q4 = 1e2;  % Weight for wheel velocity
+% R is a scalar because we have one control input (fs).
+% Lower R = More active/aggressive control.
+% Higher R = More passive/energy-saving.
+R = 0.01; 
+
+% sys_ol_for_pid = ss(A, B(:,2), C(1,:), D(1,2));
+% PID = pid(1,0,0);
+% sys_cl_pid_ff = sys_ol_for_pid * PID;
+% sys_cl_pid = ss(A, [B(:,1), sys_cl_pid_ff.B], [sys_cl_pid_ff.C; C(2:3,:)], [[0,sys_cl_pid_ff.D]; D(2:3,:)]);
+%% Simulation with lsim
+t = 0:0.01:5;             % Time vector (5 seconds)
+r = zeros(size(t));       % Initialize road input
+r(t>=0.5 & t<=0.7) = 0.1; % 10cm bump between 0.5s and 0.7s
+
+% For the Open-Loop (Passive) system:
+% Input 1 is road (r), Input 2 is force (fs). We set fs = 0.
+u_passive = [r; zeros(size(t))];
+
+% For the Closed-Loop (Active) system:
+% The LQR controller is built into the A_cl matrix. 
+% We only need to provide the road disturbance 'r'.
+% However, since B_cl has 2 columns, we've essentially "zeroed out" 
+% the manual force input because the feedback loop is doing the work.
+u_active = [r; zeros(size(t))]; 
+
+% Run the simulation
+[y_pass, t_pass] = lsim(sys_ol, u_passive, t);
+for i=1:10
+    q1 = rand*1e5;
+    [A_cl(:,:,i), K(:,:,i)] = fun_controller_quartercar_activesuspension_lqr(A,B,C,D,q1,q2,q3,q4,R);
+    sys_lqr = ss(A_cl(:,:,i),B,C,D);
+    [y_act(:,:,i), t_act(:,i)]   = lsim(sys_lqr, u_passive, t);
+end
+% [y_pid, t_pid]   = lsim(sys_cl_pid, u_passive, t);
+
+
+%Plotting Results
+figure;
+title('Body Acceleration (m/s^2) - Passenger Comfort')
+plot(t,y_pass(:,3),'r--');
+hold on
+legend('Passive')
+for i=1:size(sys_lqr,1)
+    plot(t, y_act(:,3,i));
+end
+grid on
+% % LQR Plot Body Travel (Output 1: xb)
+% subplot(2,1,2)
+% plot(t, y_pass(:,1), 'r--', t, y_act(:,1), 'b', 'LineWidth', 1.5)
+% title('Body Travel (m)')
+% legend('Passive', 'Active LQR')
+% xlabel('Time (s)')
+% grid on
