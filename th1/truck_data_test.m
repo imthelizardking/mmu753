@@ -2,7 +2,9 @@ clc; clear; close all;
 
 %% ABS Algorithm Thresholds
 %Algo 1
-S1 = 0.05; S2 = 0.10; %slip thresholdd
+S1 = 0.02; S2 = 0.05; %slip threshold
+% S1 = 0.02; S2 = 0.15; %slip thresholdd
+
 %Algo 2
 A1 = -40; A2 = 2; %acceleration threshold
 
@@ -49,3 +51,15 @@ wp = 1/(2*(tan(wang/2)));
 nm = 1;
 Po = 50e3;
 fa = 1; ff = 1;
+
+%% yco
+S_ref = 1.1;
+Kbf = -18;
+Kbr = -4;
+Ts = 0.0379; % max load independent static friction Nm
+R = 0.05; % resistance, ohm
+L = 56*10^(-6); % inductance, henry
+Kt = 0.0697; % motor torque constant Nm/a
+Kb = Kt * 2/3; % back emf constant Nm/A
+J = 0.291*10^(-3); % effective inertia kgm^2
+N = 0.0263; % total gear reduction mm/rad
