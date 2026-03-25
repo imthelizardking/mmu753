@@ -14,15 +14,27 @@ quartercar_cl_lqr.InputName = {'fs', 'r'};
 quartercar_cl_lqr.OutputName = {'body acceleration'; 'rattle space'; 'tire deflection'};
 
 % hinf:
-Act = tf(1,[1/60 1]); Act.InputName = 'u'; Act.OutputName = 'fs';
-Wroad = ss(0.07);  Wroad.u = 'd1';   Wroad.y = 'r';
+Act = tf(1000,[1/60 1]); Act.InputName = 'u'; Act.OutputName = 'fs';
+%% two different wroad approaches:
+Wroad = ss(0.07);
+
+V = 50; % Velocity in m/s
+Phi = 5e-6; % Road roughness (e.g., "Good" road)
+Wroad = tf(sqrt(2*Phi*V), [1, 0.1]); % Velocity-dependent filter
+
+% center_freq = 8; 
+% Q = 1; % Quality factor (width of the peak)
+% Wroad = tf([center_freq/Q, 0], [1, center_freq/Q, center_freq^2]) * 0.07;
+
+Wroad.u = 'd1'; Wroad.y = 'r';
+%%
 Wact = 0.8*tf([1 50],[1 500]);  Wact.u = 'u';  Wact.y = 'e1';
 Wd2 = ss(0.01);  Wd2.u = 'd2';   Wd2.y = 'Wd2';
 Wd3 = ss(0.5);   Wd3.u = 'd3';   Wd3.y = 'Wd3';
 HandlingTarget = 0.04 * tf([1/8 1],[1/80 1]);
 ComfortTarget = 0.4 * tf([1/0.45 1],[1/150 1]);
 Targets = [HandlingTarget ; ComfortTarget];
-beta = [0.5, 1];
+beta = [0.01];
 Wsd = beta / HandlingTarget;
 Wsd.u = 'sd';  Wsd.y = 'e3';
 Wab = (1-beta) / ComfortTarget;
@@ -49,6 +61,8 @@ hold on
 
 % bodemag(quartercar_cl_lqr('body acceleration','r'),'k')
 bodemag(quartercar_cl_lqr({'body acceleration'; 'rattle space'; 'tire deflection'},'r'), 'r');
+
+legend('Open-loop','hinf','LQR','location','SouthEast')
 %% Time simulations
 % % time and disturbance signals:
 % t = 0:0.01:5;             % Time vector (5 seconds)
