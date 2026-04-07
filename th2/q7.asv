@@ -1,0 +1,84 @@
+clf; clear all; clc;
+%%
+init_params;
+%%
+s = tf('s');
+H1 = s*(c*s+k)/...
+     (m*s^2+c*s+k); % transfer function from road height speed to sprung acceleration
+H2 = -(m*s)/...
+     (m*s^2+c*s+k); % transfer function from road height speed to rattle space displacement
+
+%% model
+A = [0, 1; -k/m, -c/m]; B = [0; 1/m]; L = [-1; c/m];
+C = eye(size(A));
+% C = A;
+D = 0;
+%% case 0: passive
+CL_case0 = ss(A,B,C,D);
+%% case 1: equal
+ro1 = 1; ro2 = 1;
+Q = diag([ro1, ro2]);
+R = .001;
+[K_case1, S, P] = lqr(A, B, Q, R);
+CL_case1 = ss(A-B*K_case1,B,C,D);
+%% case 2: body acc. dominant
+ro1 = 1; ro2 = 1000;
+Q = diag([ro1, ro2]);
+R = .001;
+[K_case2, S, P] = lqr(A, B, Q, R);
+CL_case2 = ss(A-B*K_case2,B,C,D);
+%% case 3: ro2 dominant
+ro1 = 10000; ro2 = 1;
+Q = diag([ro1, ro2]);
+R = .001;
+[K_case3, S, P] = lqr(A, B, Q, R);
+CL_case3 = ss(A-B*K_case3,B,C,D);
+%%
+f=logspace(-1,2,100);  w=2*pi*f;
+[sys_passive_mag_,sys_passive_phase_]=bode(A,L,C,D,1,w);
+
+rho1 = [1;0;0;0;1000;5000;10000];
+rho2 = [1;1000;5000;10000;0;0;0];
+temp = [rho1, rho2];
+rhos = permute(temp, [2, 3, 1]);
+R = .001;
+for i=1:size(rhos,3)
+    Q(:,:,i) = diag([rhos(1,1,i), rhos(2,1,i)]);
+    [K(:,:,i), ~, ~] = lqr(A, B, Q(:,:,i), R);
+    [sys_active_mag_(:,:,i),sys_active_phase_(:,:,i)] = bode(A-B*K(:,:,i),L,C,D,1,w);
+end
+%% plot
+clf; clc;
+j = sqrt(-1);
+s=j*w;
+for i=1:100   
+    sys_passive_mag__(i) = sys_passive_mag_(i,1)*s(i);
+end
+sys_passive_mag=20*log10(sys_passive_mag__);
+for j=1:size(sys_active_mag_,3)
+    for i=1:100
+        sys_active_mag__(i,1,j) = sys_active_mag_(i,1,j)*s(i);
+    end
+    sys_active_mag(:,1,j) = 20*log10(sys_active_mag__(:,1,j));
+end
+
+% semilogx(f,sys_passive_mag,'b',f,sys_active_mag(:,:,3),'r-');
+semilogx(f,sys_passive_mag,'b');
+hold on
+for i=1:size(sys_active_mag,3)
+    semilogx(f,sys_active_mag(:,:,3),'r-');
+    labels(i) = sprintf('q1=%d, q2=%d, q1, q2');
+end
+
+
+
+title('blue/dashed:Passive - red/full:Active')
+xlabel('Frequency [Hz]');
+xlabel('Transfer function [ydoubledot/y0dot]');
+%%
+[case1_bodemag,case1_bodephase] = bode(A-B*K_case1,L,C,D,1,w);
+[case2_bodemag,case2_bodephase] = bode(A-B*K_case2,L,C,D,1,w);
+[case3_bodemag,case3_bodephase] = bode(A-B*K_case3,L,C,D,1,w);
+plo
+title('bode');
+legend('passive','equal','body acc dominant', 'rattle space deflection dominant')

@@ -1,0 +1,69 @@
+clf; clc;
+%%
+init_params;
+%%
+s = tf('s');
+H1 = s*(c*s+k)/...
+     (m*s^2+c*s+k); % transfer function from road height speed to sprung acceleration
+H2 = -(m*s)/...
+     (m*s^2+c*s+k); % transfer function from road height speed to rattle space displacement
+
+%% model
+A = [0, 1; -k/m, -c/m]; B = [0; 1/m]; L = [-1; c/m];
+C = eye(size(A));
+D = 0;
+%% get body acc response
+f=logspace(-1,2,100);  w=2*pi*f;
+[sys_passive_, ~] = bode(A,L,C,D,1,w);
+% rho1 = [1;0;0;0;1000;5000;10000]; % body acc.
+% rho2 = [1;1000;5000;10000;0;0;0]; % rattlespace
+rho1 = [0;10000]; % body acc.
+rho2 = [10000;0]; % rattlespace
+temp = [rho1, rho2];
+rhos = permute(temp, [2, 3, 1]);
+R = .001;
+for i=1:size(rhos,3)
+    Q(:,:,i) = diag([rhos(1,1,i), rhos(2,1,i)]);
+    [K(:,:,i), ~, ~] = lqr(A, B, Q(:,:,i), R);
+    [sys_active_(:,:,i), ~] = bode(A-B*K(:,:,i),L,C,D,1,w);
+end
+j = sqrt(-1);
+s=j*w;
+for i=1:100   
+    sys_passive_acc__(i) = sys_passive_(i,1)*s(i);
+    sys_passive_rattlespace__(i) = sys_passive_(i,2)*s(i);
+end
+sys_passive_=20*log10(sys_passive_acc__);
+sys_passive_rattlespace=20*log10(sys_passive_rattlespace__);
+for j=1:size(sys_active_,3)
+    for i=1:100
+        sys_active_acc__(i,1,j) = sys_active_(i,1,j)*s(i);
+        sys_active_rattlespace__(i,1,j) = sys_active_(i,2,j)*s(i);
+    end
+    sys_active_acc(:,1,j) = 20*log10(sys_active_acc__(:,1,j));
+    sys_active_rattlespace(:,1,j) = 20*log10(sys_active_rattlespace__(:,1,j));
+end
+figure(1);
+semilogx(f,sys_passive_,'b');
+labels(1) = "passive";
+hold on
+for i=1:size(sys_active_acc,3)
+    semilogx(f,sys_active_acc(:,:,i));    
+    labels(i+1) = strcat('q1= ', num2str(rhos(1,1,i)), ' q2 = ', num2str(rhos(2,1,i)));
+end
+xlabel('Frequency [Hz]');
+legend(labels, 'Location', 'best'); % Add all labels at once
+title('Body acceleration');
+grid minor
+figure(2);
+semilogx(f,sys_passive_rattlespace,'b');
+labels(1) = "passive";
+hold on
+for i=1:size(sys_active_rattlespace,3)
+    semilogx(f,sys_active_rattlespace(:,:,i));    
+    labels(i+1) = strcat('q1= ', num2str(rhos(1,1,i)), ' q2 = ', num2str(rhos(2,1,i)));
+end
+xlabel('Frequency [Hz]');
+legend(labels, 'Location', 'best'); % Add all labels at once
+title('Rattle space');
+grid minor

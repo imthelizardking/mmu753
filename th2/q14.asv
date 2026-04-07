@@ -1,0 +1,95 @@
+clear all, clc; clf;
+%% active suspension model used in rajavani for LQR control extended for h-infinity synthesis
+% states:
+%   x1 = zs-zu (rattle space)
+%   x2 = zs_dot (body velocity)
+%   x3 = zu-zr (tire displacement)
+%   x4 = zu_dot (tire velocity)
+% inputs:
+%   u: actuator force
+% outputs:
+%   y1 = zs_dot_dot (body acceleration)
+%   y2 = zs-zu (=x1) (rattle space)
+% virtual outputs:
+%   z1 = zs_dot_dot (body acceleration)
+%   z2 = zs-zu (=x1) (rattle space)
+%%
+% Physical parameters (taken from 1989 br)
+ms = 240;    % kg
+mu = 36;     % kg
+bs = 1000;   % N/m/s
+ks = 16000 ; % N/m
+kt = 160000; % N/m
+bt = 1600;      % N/m/s
+% system dynamics
+A = [0, 1, 0, -1;...
+     -ks/ms, -bs/ms, 0, bs/ms;...
+     0, 0, 0, 1;...
+     ks/mu, bs/mu, -kt/mu, -(bs+bt)/mu];
+
+bt_temp = bt;
+bt = 0;
+A_withouttiredamping = [0, 1, 0, -1;...
+     -ks/ms, -bs/ms, 0, bs/ms;...
+     0, 0, 0, 1;...
+     ks/mu, bs/mu, -kt/mu, -(bs+bt)/mu];
+
+bt = bt_temp;
+
+B = [0;...
+     1/ms;...
+     0;...
+     -1/mu];
+
+L = [0;...
+     0;...
+     -1;...
+     0];
+
+B_x = [B,L];
+
+B1 = L;
+B2 = B;
+
+C = [A(2,:);...
+     A(1,:);...
+     A(3,:)];
+
+C1 = C;
+C2 = C;
+
+D11 = [0;...
+       0;...
+       0];
+D12 = [1/ms;...
+       0;...
+       0];
+D21 = [0;...
+       0;...
+       0];
+D22 = [1/ms;...
+       0;...
+       0];
+D = [D22, D21];
+quartercar_withtiredamping = ss(A, B_x, C, D);
+quartercar_withtiredamping.StateName = {'rattle space'; 'body velocity'; 'tire deflection'; 'tire velocity'};
+quartercar_withtiredamping.InputName = {'fs'; 'r'};
+quartercar_withtiredamping.OutputName = {'body acceleration'; 'rattle space'; 'tire deflection'};
+
+quartercar_withouttiredamping = ss(A_withouttiredamping, B_x, C, D);
+quartercar_withtiredamping.StateName = {'rattle space'; 'body velocity'; 'tire deflection'; 'tire velocity'};
+quartercar_withtiredamping.InputName = {'fs'; 'r'};
+quartercar_withtiredamping.OutputName = {'body acceleration'; 'rattle space'; 'tire deflection'};
+
+ro1 = 400; ro2 = 16; ro3 = 400; ro4 = 16;
+K_lqr = controller_actsus_rajamani(A, B, ro1, ro2, ro3, ro4, ks, ms, bs);
+quartercar_cl_lqr = ss(A-B*K_lqr,B_x,C,D);
+quartercar_cl_lqr.InputName = {'fs', 'r'};
+quartercar_cl_lqr.OutputName = {'body acceleration'; 'rattle space'; 'tire deflection'};
+%%
+figure(1)
+bodemag(quartercar_withtiredamping({'body acceleration'; 'rattle space'; 'tire deflection'},'r'), 'b');
+hold on
+bodemag(quartercar_cl_lqr({'body acceleration'; 'rattle space'; 'tire deflection'},'r'), 'r');
+legend('Passive','LQR','location','SouthEast')
+grid minor

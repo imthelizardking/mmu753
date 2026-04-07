@@ -1,0 +1,58 @@
+%% Modified Loop for Question 8: Simple Velocity Feedback
+% We use the same rhos and R, but we zero out the position gain (K1)
+clc; clf;
+% Define frequency range for plotting
+f = logspace(-1, 2, 100);
+w = 2*pi*f;
+s_val = 1j * w; % Complex frequency vector for transfer function calculations
+
+% Plot Passive Base Case
+figure(1); hold on; grid minor;
+semilogx(f, sys_passive_, 'b', 'LineWidth', 2);
+labels = "Passive";
+
+figure(2); hold on; grid minor;
+semilogx(f, sys_passive_rattlespace, 'b', 'LineWidth', 2);
+
+for i = 1:size(rhos, 3)
+    % 1. Compute the optimal LQR gains as a baseline
+    Q_curr = diag([rhos(1,1,i), rhos(2,1,i)]);
+    [K_full, ~, ~] = lqr(A, B, Q_curr, R);
+
+    % 2. QUESTION 8 STEP: Create Simple Velocity Feedback
+    % We take ONLY the second gain (the one multiplying x2/velocity)
+    k_vel_only = K_full(2);
+    K_simple = [0, k_vel_only]; % Set position feedback to zero
+
+    % 3. Compute Closed-Loop Response with Velocity Feedback Only
+    % New A matrix: A_cl = A - B * K_simple
+    [sys_vel_fb, ~] = bode(A - B*K_simple, L, C, D, 1, w);
+
+    % 4. Process Magnitude Data (Acceleration and Rattle Space)
+    for k = 1:100
+        % Calculate Acceleration: H(s) * s
+        acc_mag = abs(sys_vel_fb(k, 1, 1) * s_val(k));
+        sys_active_acc(k, i) = 20*log10(acc_mag);
+
+        % Calculate Rattle Space: H(s) * s
+        rs_mag = abs(sys_vel_fb(k, 2, 1) * s_val(k));
+        sys_active_rattlespace(k, i) = 20*log10(rs_mag);
+    end
+
+    % 5. Plot results
+    figure(1);
+    semilogx(f, sys_active_acc(:, i));
+
+    figure(2);
+    semilogx(f, sys_active_rattlespace(:, i));
+
+    % Update Labels
+    labels(i+1) = sprintf('Vel Feedback (k2=%.1f)', k_vel_only);
+end
+
+% Final Formatting
+figure(1); title('Body Acceleration (Velocity Feedback Only)');
+xlabel('Frequency [Hz]'); ylabel('dB'); legend(labels, 'Location', 'best');
+
+figure(2); title('Rattle Space (Velocity Feedback Only)');
+xlabel('Frequency [Hz]'); ylabel('dB'); legend(labels, 'Location', 'best');

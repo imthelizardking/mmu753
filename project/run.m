@@ -3,8 +3,7 @@ clear all; clc;
 %% create model
 % model_quatercar_bd;
 model_rajavani_actsus_modifiedhinf;
-%% design controllers:
-% lqr:
+%% synthesize lqr
 % ro1 = 0.4; ro2 = 0.16; ro3 = 0.4; ro4 = 0.16;
 % ro1 = 1.0; ro2 = 1.0; ro3 = 1.0; ro4 = 1.0;
 ro1 = 400; ro2 = 16; ro3 = 400; ro4 = 16;
@@ -12,29 +11,28 @@ K_lqr = controller_actsus_rajamani(A, B, ro1, ro2, ro3, ro4, ks, ms, bs);
 quartercar_cl_lqr = ss(A-B*K_lqr,B_x,C,D);
 quartercar_cl_lqr.InputName = {'fs', 'r'};
 quartercar_cl_lqr.OutputName = {'body acceleration'; 'rattle space'; 'tire deflection'};
-
-% hinf:
-Act = tf(1000,[1/60 1]); Act.InputName = 'u'; Act.OutputName = 'fs';
-%% two different wroad approaches:
-Wroad = ss(0.07);
-
+%% three different wroad approaches:
+% % method 1: 7cm bump
+% Wroad = ss(0.07);
+% method 2:
 V = 50; % Velocity in m/s
 Phi = 5e-6; % Road roughness (e.g., "Good" road)
 Wroad = tf(sqrt(2*Phi*V), [1, 0.1]); % Velocity-dependent filter
-
+% % method 3:
 % center_freq = 8; 
 % Q = 1; % Quality factor (width of the peak)
 % Wroad = tf([center_freq/Q, 0], [1, center_freq/Q, center_freq^2]) * 0.07;
 
 Wroad.u = 'd1'; Wroad.y = 'r';
-%%
+%% create system
+Act = tf(1000,[1/60 1]); Act.InputName = 'u'; Act.OutputName = 'fs';
 Wact = 0.8*tf([1 50],[1 500]);  Wact.u = 'u';  Wact.y = 'e1';
 Wd2 = ss(0.01);  Wd2.u = 'd2';   Wd2.y = 'Wd2';
 Wd3 = ss(0.5);   Wd3.u = 'd3';   Wd3.y = 'Wd3';
 HandlingTarget = 0.04 * tf([1/8 1],[1/80 1]);
 ComfortTarget = 0.4 * tf([1/0.45 1],[1/150 1]);
 Targets = [HandlingTarget ; ComfortTarget];
-beta = [0.01];
+beta = [0.5];
 Wsd = beta / HandlingTarget;
 Wsd.u = 'sd';  Wsd.y = 'e3';
 Wab = (1-beta) / ComfortTarget;
@@ -45,24 +43,20 @@ ICinputs = {'d1';'d2';'d3';'u'};
 ICoutputs = {'e1';'e2';'e3';'y1';'y2'};
 qcaric = connect(quartercar_x(1:2,:),Act,Wroad,Wact,Wab,Wsd,Wd2,Wd3,...
                  sdmeas,abmeas,ICinputs,ICoutputs);
+%% sytnhesize hinf controller
 [K_hinf, ~, gamma] = hinfsyn(qcaric, 2, 1);
 K_hinf.InputName = {'sd', 'ab'};
 K_hinf.OutputName = {'u'};
 quartercar_cl_hinf = connect(quartercar_x, Act, K_hinf, 'r', {'ab'; 'sd'; 'tire deflection'});
-%% plot
+%% plot bodes
 clf
-% bodemag(quartercar('body acceleration','r'),'b');
 bodemag(quartercar({'body acceleration'; 'rattle space'; 'tire deflection'},'r') , 'b--');
 hold on
-
-% bodemag(quartercar_cl_hinf('body acceleration','r'),'r')
 bodemag(quartercar_cl_hinf({'ab'; 'sd'; 'tire deflection'},'r') , 'k');
 hold on
-
-% bodemag(quartercar_cl_lqr('body acceleration','r'),'k')
 bodemag(quartercar_cl_lqr({'body acceleration'; 'rattle space'; 'tire deflection'},'r'), 'r');
-
 legend('Open-loop','hinf','LQR','location','SouthEast')
+grid minor
 %% Time simulations
 % % time and disturbance signals:
 % t = 0:0.01:5;             % Time vector (5 seconds)
