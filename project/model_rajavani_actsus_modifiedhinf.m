@@ -49,34 +49,29 @@ B1 = L;
 B2 = B;
 
 C = [A(2,:);...
-     A(1,:);...
-     A(3,:)];
+     1, 0, 0, 0];
 
 C1 = C;
 C2 = C;
 
 D11 = [0;...
-       0;...
        0];
 D12 = [1/ms;...
-       0;...
-       0];
+       0;];
 D21 = [0;...
-       0;...
        0];
 D22 = [1/ms;...
-       0;...
-       0];
+       0;];
 D = [D22, D21];
 quartercar = ss(A, B_x, C, D);
 quartercar.StateName = {'rattle space'; 'body velocity'; 'tire deflection'; 'tire velocity'};
 quartercar.InputName = {'fs'; 'r'};
-quartercar.OutputName = {'body acceleration'; 'rattle space'; 'tire deflection'};
+quartercar.OutputName = {'body acceleration'; 'rattle space'};
 
 quartercar_x = ss(A, B_x, C, D);
 quartercar_x.StateName = {'rattle space'; 'body velocity'; 'tire deflection'; 'tire velocity'};
 quartercar_x.InputName = {'fs'; 'r'};
-quartercar_x.OutputName = {'ab'; 'sd'; 'tire deflection'};
+quartercar_x.OutputName = {'body acceleration'; 'rattle space'};
 
 % quartercar_x = ss(A,[B1, B2],[C1; C2],[D11, D12; D21, D22]);
 % quartercar_x.StateName = {'rattle space';'body velocity'; 'tire deflection';'tire velocity'};

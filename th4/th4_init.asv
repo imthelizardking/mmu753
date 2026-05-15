@@ -1,0 +1,10 @@
+clf; clear all; clc;
+
+part1_q4;
+gemini_urban_drive_cycle;
+v_lead = [t', v'];
+
+% battery
+
+SOC_init = 60;
+battery_capacity = 

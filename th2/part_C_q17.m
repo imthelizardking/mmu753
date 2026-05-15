@@ -71,3 +71,6 @@ T_sub = [ 1, -a1,  w/2,  0, 0, 0, 0;  % zs_fl
 T = blkdiag(T_sub, T_sub);
 K_full = K_local * T; % This is 4 x 14
 fullcar_closedloop = ss(A-B_u*K_full,B,C,D);
+
+figure(1)
+bodemag(fullcar_closedloop);

@@ -21,7 +21,7 @@ Lkr = 0.01; L1 = 0.3534; L2 = 90.9; NFFT = 1024; q  = 10;
 % Gh0 = (2.14e-7)/(2*pi); kroad = 2; %Concrete motorway
 % Gh0 = (3.0e-7)/(2*pi); kroad = 2; %Good road
 % Gh0 = (4.8e-7)/(2*pi); kroad = 2; %Smooth highway
-% Gh0 = (2.0e-6)/(2*pi); kroad = 2; %Average road
+Gh0 = (2.0e-6)/(2*pi); kroad = 2; %Average road
 % Gh0 = (4.39e-6)/(2*pi); kroad = 2; %Minor road
 % Gh0 = (4.4e-6)/(2*pi); kroad = 2; %Highway with gravel
 % Gh0 = (1.5e-5)/(2*pi); kroad = 2; %Poor road
@@ -30,7 +30,7 @@ Lkr = 0.01; L1 = 0.3534; L2 = 90.9; NFFT = 1024; q  = 10;
 % Gh0 = (1.2e-5)/(2*pi); kroad = 2; %Pasture
 % Gh0 = (3.16e-5)/(2*pi); kroad = 2; %Cross country medium roughness
 % Gh0 = (4.98e-5)/(2*pi); kroad = 2; %Grassland
- Gh0 = (2.34e-4)/(2*pi); kroad = 2; %Rocky Soil
+ % Gh0 = (2.34e-4)/(2*pi); kroad = 2; %Rocky Soil
 % Gh0 = (3.6e-4)/(2*pi); kroad = 2; %Cross country severe
 % 
 % Gh0 = (3.44e-4)/(2*pi); kroad = 2; %Random Test Course

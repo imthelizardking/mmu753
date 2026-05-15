@@ -1,4 +1,4 @@
-clf; clc;
+clf; clear all; clc;
 %%
 init_params;
 %%
@@ -12,13 +12,18 @@ H2 = -(m*s)/...
 A = [0, 1; -k/m, -c/m]; B = [0; 1/m]; L = [-1; c/m];
 C = eye(size(A));
 D = 0;
+% A = [-c/m, k/m; -1, 0]; B = [1/m; 0]; L = [c/m; 1];
+% C = eye(size(A));
+% D = 0;
 %% get body acc response
 f=logspace(-1,2,100);  w=2*pi*f;
 [sys_passive_, ~] = bode(A,L,C,D,1,w);
-% rho1 = [1;0;0;0;1000;5000;10000]; % body acc.
-% rho2 = [1;1000;5000;10000;0;0;0]; % rattlespace
-rho1 = [0;10000]; % body acc.
-rho2 = [10000;0]; % rattlespace
+% rho1 = [1;0;0;0;1000;5000;10000];
+% rho2 = [1;1000;5000;10000;0;0;0];
+% rho1 = [1000;5000;10000];
+% rho2 = [0;0;0];
+rho1 = [0];
+rho2 = [10000];
 temp = [rho1, rho2];
 rhos = permute(temp, [2, 3, 1]);
 R = .001;
@@ -30,15 +35,15 @@ end
 j = sqrt(-1);
 s=j*w;
 for i=1:100   
-    sys_passive_acc__(i) = sys_passive_(i,1)*s(i);
-    sys_passive_rattlespace__(i) = sys_passive_(i,2)*s(i);
+    sys_passive_acc__(i) = sys_passive_(i,2)*s(i);
+    sys_passive_rattlespace__(i) = sys_passive_(i,1)*s(i);
 end
 sys_passive_=20*log10(sys_passive_acc__);
 sys_passive_rattlespace=20*log10(sys_passive_rattlespace__);
 for j=1:size(sys_active_,3)
     for i=1:100
-        sys_active_acc__(i,1,j) = sys_active_(i,1,j)*s(i);
-        sys_active_rattlespace__(i,1,j) = sys_active_(i,2,j)*s(i);
+        sys_active_acc__(i,1,j) = sys_active_(i,2,j)*s(i);
+        sys_active_rattlespace__(i,1,j) = sys_active_(i,1,j)*s(i);
     end
     sys_active_acc(:,1,j) = 20*log10(sys_active_acc__(:,1,j));
     sys_active_rattlespace(:,1,j) = 20*log10(sys_active_rattlespace__(:,1,j));

@@ -71,6 +71,8 @@ D22 = [1/ms;...
        0;...
        0];
 D = [D22, D21];
+
+% create ss models
 quartercar_withtiredamping = ss(A, B_x, C, D);
 quartercar_withtiredamping.StateName = {'rattle space'; 'body velocity'; 'tire deflection'; 'tire velocity'};
 quartercar_withtiredamping.InputName = {'fs'; 'r'};
@@ -81,15 +83,32 @@ quartercar_withtiredamping.StateName = {'rattle space'; 'body velocity'; 'tire d
 quartercar_withtiredamping.InputName = {'fs'; 'r'};
 quartercar_withtiredamping.OutputName = {'body acceleration'; 'rattle space'; 'tire deflection'};
 
+% design lqr s
 ro1 = 400; ro2 = 16; ro3 = 400; ro4 = 16;
-K_lqr = controller_actsus_rajamani(A, B, ro1, ro2, ro3, ro4, ks, ms, bs);
-quartercar_withtiredamping_cl_lqr = ss(A-B*K_lqr,B_x,C,D);
+% ro1 = 0.4; ro2 = 0.16; ro3 = 0.4; ro4 = 0.16;
+K_lqr_withtiredamping = controller_actsus_rajamani(A, B, ro1, ro2, ro3, ro4, ks, ms, bs);
+K_velofeedback_withtiredamping = [0, K_lqr_withtiredamping(2), 0, 0];
+quartercar_withtiredamping_cl_lqr = ss(A-B*K_lqr_withtiredamping,B_x,C,D);
 quartercar_withtiredamping_cl_lqr.InputName = {'fs', 'r'};
 quartercar_withtiredamping_cl_lqr.OutputName = {'body acceleration'; 'rattle space'; 'tire deflection'};
+quartercar_withtiredamping_cl_velocityfeedback = ss(A-B*K_velofeedback_withtiredamping, B_x, C, D);
+quartercar_withtiredamping_cl_velocityfeedback.InputName = {'fs', 'r'};
+quartercar_withtiredamping_cl_velocityfeedback.OutputName = {'body acceleration'; 'rattle space'; 'tire deflection'};
+
+temp_sys = ss(A-B*K_lqr_withtiredamping,L,C,0);
+
 K_lqr_withouttiredamping = controller_actsus_rajamani(A_withouttiredamping, B, ro1, ro2, ro3, ro4, ks, ms, bs);
+K_velofeedback_withouttiredamping = [0, K_lqr_withouttiredamping(2), 0, 0];
 quartercar_withouttiredamping_cl_lqr = ss(A_withouttiredamping-B*K_lqr_withouttiredamping,B_x,C,D);
 quartercar_withouttiredamping_cl_lqr.InputName = {'fs', 'r'};
 quartercar_withouttiredamping_cl_lqr.OutputName = {'body acceleration'; 'rattle space'; 'tire deflection'};
+quartercar_withouttiredamping_cl_velocityfeedback = ss(A_withouttiredamping-B*K_velofeedback_withouttiredamping, B_x, C, D);
+quartercar_withouttiredamping_cl_velocityfeedback.InputName = {'fs', 'r'};
+quartercar_withouttiredamping_cl_velocityfeedback.OutputName = {'body acceleration'; 'rattle space'; 'tire deflection'};
+
+
+
+
 %%
 figure(1)
 bodemag(quartercar_withtiredamping({'body acceleration'; 'rattle space'; 'tire deflection'},'r'), 'b');
@@ -97,5 +116,9 @@ hold on
 bodemag(quartercar_withouttiredamping_cl_lqr({'body acceleration'; 'rattle space'; 'tire deflection'},'r'), 'r');
 hold on
 bodemag(quartercar_withtiredamping_cl_lqr({'body acceleration'; 'rattle space'; 'tire deflection'},'r'), 'g');
-legend('Passive', 'LQR without tire damping', 'LQR with tire damping','location','SouthEast')
+hold on
+bodemag(quartercar_withtiredamping_cl_velocityfeedback({'body acceleration'; 'rattle space'; 'tire deflection'},'r'), 'm');
+hold on
+bodemag(quartercar_withouttiredamping_cl_velocityfeedback({'body acceleration'; 'rattle space'; 'tire deflection'},'r'), 'k');
+legend('Passive', 'LQR without tire damping', 'LQR with tire damping', 'Velo FB with tire damping', 'Velo FB without tire damping', 'location','SouthEast')
 grid minor

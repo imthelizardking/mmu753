@@ -11,74 +11,64 @@ H2 = -(m*s)/...
 %% model
 A = [0, 1; -k/m, -c/m]; B = [0; 1/m]; L = [-1; c/m];
 C = eye(size(A));
-% C = A;
 D = 0;
-%% case 0: passive
-CL_case0 = ss(A,B,C,D);
-%% case 1: equal
-ro1 = 1; ro2 = 1;
-Q = diag([ro1, ro2]);
-R = .001;
-[K_case1, S, P] = lqr(A, B, Q, R);
-CL_case1 = ss(A-B*K_case1,B,C,D);
-%% case 2: body acc. dominant
-ro1 = 1; ro2 = 1000;
-Q = diag([ro1, ro2]);
-R = .001;
-[K_case2, S, P] = lqr(A, B, Q, R);
-CL_case2 = ss(A-B*K_case2,B,C,D);
-%% case 3: ro2 dominant
-ro1 = 10000; ro2 = 1;
-Q = diag([ro1, ro2]);
-R = .001;
-[K_case3, S, P] = lqr(A, B, Q, R);
-CL_case3 = ss(A-B*K_case3,B,C,D);
-%%
+% A = [-c/m, k/m; -1, 0]; B = [1/m; 0]; L = [c/m; 1];
+% C = eye(size(A));
+% D = 0;
+%% get body acc response
 f=logspace(-1,2,100);  w=2*pi*f;
-[sys_passive_mag_,sys_passive_phase_]=bode(A,L,C,D,1,w);
-
-rho1 = [1;0;0;0;1000;5000;10000];
-rho2 = [1;1000;5000;10000;0;0;0];
+[sys_passive_, ~] = bode(A,L,C,D,1,w);
+% rho1 = [1;0;0;0;1000;5000;10000]; % body acc.
+% rho2 = [1;1000;5000;10000;0;0;0]; % rattlespace
+rho2 = [1000;5000;10000]; % body acc.
+rho1 = [0;0;0]; % rattlespace
+% rho1 = [0;10000]; % body acc.
+% rho2 = [10000;0]; % rattlespace
 temp = [rho1, rho2];
 rhos = permute(temp, [2, 3, 1]);
 R = .001;
 for i=1:size(rhos,3)
     Q(:,:,i) = diag([rhos(1,1,i), rhos(2,1,i)]);
     [K(:,:,i), ~, ~] = lqr(A, B, Q(:,:,i), R);
-    [sys_active_mag_(:,:,i),sys_active_phase_(:,:,i)] = bode(A-B*K(:,:,i),L,C,D,1,w);
+    [sys_active_(:,:,i), ~] = bode(A-B*K(:,:,i),L,C,D,1,w);
 end
-%% plot
-clf; clc;
 j = sqrt(-1);
 s=j*w;
 for i=1:100   
-    sys_passive_mag__(i) = sys_passive_mag_(i,1)*s(i);
+    sys_passive_acc__(i) = sys_passive_(i,1)*s(i);
+    sys_passive_rattlespace__(i) = sys_passive_(i,2)*s(i);
 end
-sys_passive_mag=20*log10(sys_passive_mag__);
-for j=1:size(sys_active_mag_,3)
+sys_passive_=20*log10(sys_passive_acc__);
+sys_passive_rattlespace=20*log10(sys_passive_rattlespace__);
+for j=1:size(sys_active_,3)
     for i=1:100
-        sys_active_mag__(i,1,j) = sys_active_mag_(i,1,j)*s(i);
+        sys_active_acc__(i,1,j) = sys_active_(i,1,j)*s(i);
+        sys_active_rattlespace__(i,1,j) = sys_active_(i,2,j)*s(i);
     end
-    sys_active_mag(:,1,j) = 20*log10(sys_active_mag__(:,1,j));
+    sys_active_acc(:,1,j) = 20*log10(sys_active_acc__(:,1,j));
+    sys_active_rattlespace(:,1,j) = 20*log10(sys_active_rattlespace__(:,1,j));
 end
-
-% semilogx(f,sys_passive_mag,'b',f,sys_active_mag(:,:,3),'r-');
-semilogx(f,sys_passive_mag,'b');
+figure(1);
+semilogx(f,sys_passive_,'b');
+labels(1) = "passive";
 hold on
-for i=1:size(sys_active_mag,3)
-    semilogx(f,sys_active_mag(:,:,3),'r-');
-    labels(i) = sprintf('q1=%d, q2=%d, q1, q2');
+for i=1:size(sys_active_acc,3)
+    semilogx(f,sys_active_acc(:,:,i));    
+    labels(i+1) = strcat('q1= ', num2str(rhos(1,1,i)), ' q2 = ', num2str(rhos(2,1,i)));
 end
-
-
-
-title('blue/dashed:Passive - red/full:Active')
 xlabel('Frequency [Hz]');
-xlabel('Transfer function [ydoubledot/y0dot]');
-%%
-[case1_bodemag,case1_bodephase] = bode(A-B*K_case1,L,C,D,1,w);
-[case2_bodemag,case2_bodephase] = bode(A-B*K_case2,L,C,D,1,w);
-[case3_bodemag,case3_bodephase] = bode(A-B*K_case3,L,C,D,1,w);
-plo
-title('bode');
-legend('passive','equal','body acc dominant', 'rattle space deflection dominant')
+legend(labels, 'Location', 'best'); % Add all labels at once
+title('Body acceleration');
+grid minor
+figure(2);
+semilogx(f,sys_passive_rattlespace,'b');
+labels(1) = "passive";
+hold on
+for i=1:size(sys_active_rattlespace,3)
+    semilogx(f,sys_active_rattlespace(:,:,i));    
+    labels(i+1) = strcat('q1= ', num2str(rhos(1,1,i)), ' q2 = ', num2str(rhos(2,1,i)));
+end
+xlabel('Frequency [Hz]');
+legend(labels, 'Location', 'best'); % Add all labels at once
+title('Rattle space');
+grid minor

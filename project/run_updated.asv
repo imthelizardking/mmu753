@@ -1,0 +1,165 @@
+clf;
+clear all; clc;
+%% active suspension model used in butsuen
+% for LQR control extended for h-infinity synthesis
+% states:
+%   x1 = zs-zu (rattle space)
+%   x2 = zs_dot (body velocity)
+%   x3 = zu-zr (tire displacement)
+%   x4 = zu_dot (tire velocity)
+% inputs:
+%   u: actuator force
+%   r_dot: road velocity
+% outputs:
+%   y1 = zs_dot_dot (body acceleration)
+%   y2 = zs-zu (=x1) (rattle space)
+% virtual outputs:
+%   z1 = zs_dot_dot (body acceleration)
+%   z2 = zs-zu (=x1) (rattle space)
+%% generate road profile at nominal speed V=25 m/s (used for original plots)
+% roadprofile.m must have u0=25 and q=100
+u0 = 25; road_type = 'Type A';
+[road_sig, t, hsum] = roadprofile_fun(road_type, u0);
+dt     = t(2) - t(1);
+rdot_raw = [diff(hsum)./dt, 0];
+fs_sig = 1/dt;
+[b_lp,a_lp] = butter(4, 50/(fs_sig/2), 'low');
+rdot_iso = filtfilt(b_lp, a_lp, rdot_raw);
+%% define parameters
+params = 'nom';
+if strcmp(params,'bd')
+    % Physical parameters (taken from bd example)
+    ms = 300;    % kg
+    mu = 60;     % kg
+    bs = 1000;   % N/m/s
+    ks = 16000 ; % N/m
+    kt = 190000; % N/m
+    bt = 0;      % N/m/s
+elseif strcmp(params,'nom')
+    % Physical parameters (taken from 1989 br)
+    ms = 240;    % kg
+    mu = 36;     % kg
+    bs = 1000;   % N/m/s
+    ks = 16000 ; % N/m
+    kt = 160000; % N/m
+    bt = 0;      % N/m/s
+elseif strcmp(params,'suv')
+    % Physical parameters
+    ms = 600;    % kg
+    mu = 60;     % kg
+    bs = 3000;   % N/m/s
+    ks = 20000 ; % N/m
+    kt = 180000; % N/m
+    bt = 0;      % N/m/s
+elseif strcmp(params,'truck')
+    % Physical parameters
+    ms = 4000;    % kg
+    mu = 200;     % kg
+    bs = 8000;   % N/m/s
+    ks = 150000 ; % N/m
+    kt = 800000; % N/m
+    bt = 0;      % N/m/s
+end
+
+% system dynamics
+A = [0, 1, 0, -1;...
+    -ks/ms, -bs/ms, 0, bs/ms;...
+    0, 0, 0, 1;...
+    ks/mu, bs/mu, -kt/mu, -(bs+bt)/mu];
+B = [0;...
+    1/ms;...
+    0;...
+    -1/mu];
+L = [0;...
+    0;...
+    -1;...
+    0];
+B_x = [B,L];
+C = [  A(2,:);...
+    1, 0, 0, 0];
+D = [1/ms, 0;...
+    0,    0];
+quartercar = ss(A, B_x, C, D);
+quartercar.StateName = {'rattle space'; 'body velocity'; 'tire deflection'; 'tire velocity'};
+quartercar.InputName = {'fs','r_dot'};
+quartercar.OutputName = {'body acceleration'; 'rattle space'};
+quartercar_lqr = quartercar(:,'r_dot');
+%%
+[y_ol_a,~] = lsim(quartercar('body acceleration','r_dot'), rdot_iso, t);
+[y_ol_s,~] = lsim(quartercar('rattle space','r_dot'),      rdot_iso, t);
+rms_a = rms(y_ol_a);
+rms_s = rms(y_ol_s);
+rms_r = rms(rdot_iso);
+%% lqr design
+ro1 = 0.4; ro2 = 0.16; ro3 = 0.4; ro4 = 0.16;
+Q = [ks^2/ms^2+ro1, bs*ks/ms^2,    0,   -bs*ks/ms^2;...
+    bs*ks/ms^2,    bs^2/ms^2+ro2, 0,   -bs^2/ms^2;...
+    0,             0,             ro3, 0;...
+    -bs*ks/ms^2,   -bs^2/ms^2,    0,   bs^2/ms^2+ro4];
+N = [-ks/ms^2;...
+    -bs/ms^2;...
+    0;
+    bs/ms^2];
+R = 1/ms^2;
+K_lqr = lqr(quartercar(:,'r_dot'), Q, R, N);
+quartercar_cl_lqr = ss(A-B*K_lqr,L,C,D(:,2));
+quartercar_cl_lqr.StateName = {'rattle space'; 'body velocity'; 'tire deflection'; 'tire velocity'};
+quartercar_cl_lqr.InputName = {'r_dot'};
+quartercar_cl_lqr.OutputName = {'body acceleration'; 'rattle space'};
+%% hinf — nominal design at V=25 m/s
+beta   = 0.05;
+V      = 25;   % nominal design speed — must match roadprofile.m u0
+tighten = 4;
+
+Wroad = tf(rms_r * sqrt(2), [1, 0.1]);
+Wroad.u = 'd1'; Wroad.y = 'r_dot';
+
+Act = tf(1,1);
+Act.InputName = 'u'; Act.OutputName = 'fs';
+
+Wact = 0.05 * tf([1,5],[1,80]);
+Wact.u = 'u'; Wact.y = 'e1';
+
+Wd2 = ss(0.01); Wd2.u = 'd2'; Wd2.y = 'Wd2';
+Wd3 = ss(0.01); Wd3.u = 'd3'; Wd3.y = 'Wd3';
+
+Wab = tighten*((1-beta)/rms_a) * tf([1/8, 1],[1/0.8, 1]);
+Wab.u = 'body acceleration'; Wab.y = 'e2';
+
+Wsd = tighten*(beta/rms_s) * tf([1/8, 1],[1/80, 1]);
+Wsd.u = 'rattle space'; Wsd.y = 'e3';
+
+sdmeas = sumblk('y1 = rattle space + Wd2');
+abmeas = sumblk('y2 = body acceleration + Wd3');
+ICinputs  = {'d1';'d2';'d3';'u'};
+ICoutputs = {'e1';'e2';'e3';'y1';'y2'};
+
+qcaric = connect(quartercar(1:2,:), Act, Wroad, Wact, Wab, Wsd, ...
+    Wd2, Wd3, sdmeas, abmeas, ICinputs, ICoutputs);
+
+% K_hinf(:,:,1) corresponds to V=25 m/s (nominal)
+[K_hinf, ~, gamma] = hinfsyn(qcaric, 2, 1);
+fprintf('gamma (V=25): %.4f\n', gamma);
+
+K_hinf.InputName  = {'rattle space','body acceleration'};
+K_hinf.OutputName = {'u'};
+
+quartercar_cl_hinf = connect(quartercar, Act, K_hinf, ...
+    'r_dot', {'body acceleration';'rattle space'});
+%% bodes
+figure(1);
+bodemag(quartercar_lqr, 'b--');
+hold on
+bodemag(quartercar_cl_lqr,'r_dot'), 'r');
+% hold on
+% bodemag(quartercar_cl_hinf({'body acceleration';'rattle space'},'r_dot') , 'k');
+grid minor
+legend('Open-loop','LQR','hinf V=25','location','SouthEast')
+title('Bodes');
+% %% time simulations at V=25 (original — unchanged)
+% [y_ol, ~]      = lsim(quartercar('body acceleration','r_dot'), rdot_iso, t);
+% [y_lqr, ~]     = lsim(quartercar_cl_lqr('body acceleration','r_dot'), rdot_iso, t);
+% [y_hinf, ~]    = lsim(quartercar_cl_hinf('body acceleration','r_dot'), rdot_iso, t);
+% [y_ol_sd, ~]   = lsim(quartercar('rattle space','r_dot'), rdot_iso, t);
+% [y_lqr_sd, ~]  = lsim(quartercar_cl_lqr('rattle space','r_dot'), rdot_iso, t);
+% [y_hinf_sd, ~] = lsim(quartercar_cl_hinf('rattle space','r_dot'), rdot_iso, t);
