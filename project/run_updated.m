@@ -395,18 +395,25 @@ rms_a_ref = rms(yab_ref);
 rms_s_ref = rms(yrs_ref);
 
 [cl_hinf_A, K_A, gamma_out_A, qcar_open_A, info_A, rdot_iso_A, r_iso_A] = ...
-    design_hinf_for_road('Type A',rms_a_ref,rms_s_ref, 70); % synthsize A
+    design_hinf_for_road('Type C',rms_a_ref,rms_s_ref, 8); % synthsize A
 [cl_hinf_D, K_D, gamma_out_D, qcar_open_D, info_D, rdot_iso_D, r_iso_D] = ...
-    design_hinf_for_road('Type D',rms_a_ref,rms_s_ref, 16); % synthsize D
+    design_hinf_for_road('Type F',rms_a_ref,rms_s_ref, 4); % synthsize D
 
-road_compare = 'Type D';
-if road_compare=='Type A'
-    r_dot_iso_compare = rdot_iso_A;
-    r_iso_compare = r_iso_A;
-elseif road_compare=='Type D'
-    r_dot_iso_compare = rdot_iso_D;
-    r_iso_compare = r_iso_D;
-end
+
+road_compare = 'Type A';
+u0_ = get_speed_for_road(road_compare);
+[~, t_, hsum_, Gh0_] = roadprofile_fun(road_compare, u0);
+r_iso_compare    = hsum_(1:length(t_));
+dt_       = t_(2) - t_(1);
+r_dot_iso_compare = [diff(hsum_)./dt_, 0];
+
+% if road_compare=='Type C'
+%     r_dot_iso_compare = rdot_iso_A;
+%     r_iso_compare = r_iso_A;
+% elseif road_compare=='Type F'
+%     r_dot_iso_compare = rdot_iso_D;
+%     r_iso_compare = r_iso_D;
+% end
 % time sim.s:
 [y_ab_ol, ~]      = lsim(quartercar('body acceleration','r_dot'), r_dot_iso_compare, t);
 [y_ab_hinfA, ~]     = lsim(cl_hinf_A('ab','r'), r_iso_compare, t);
@@ -514,19 +521,22 @@ function [cl_hinf, K, gamma_out, qcar_open, info, rdot_iso, r_iso] = design_hinf
     Wroad.u = "d1"; Wroad.y = "r";
     
     % Wact
-    % Wact = 0.005 * tf([1, w_bounce], [1, 80]);   % was 1e-6
+    Wact = 0.05 * tf([1, w_bounce], [1, 80]);   % was 1e-6
     % Wact = 0.02 * tf([1, w_bounce], [1, 80]);   % was 1e-6
-    Wact = 1e-6 * tf(1,1);
+    % Wact = 1e-6 * tf(1,1);
     Wact.u = "u"; Wact.y = "e1";
 
     Wd2 = ss(0.01); Wd2.u = "d2"; Wd2.y = "Wd2";
     Wd3 = ss(0.5);  Wd3.u = "d3"; Wd3.y = "Wd3";
 
-    Wsd = knob * (beta/rms_rs_ref) * tf(1, [1/w_bounce, 1]);
+    % Wsd = knob * (beta/rms_rs_ref) * tf(1, [1/w_bounce, 1]);
+    Wsd = knob * (beta) * tf(1, [1/w_bounce, 1]);
     Wsd.u = "sd"; Wsd.y = "e3";
 
-    Wab = knob * ((1-beta)/rms_a_ref) * ...
-          tf(1, conv([1/w_bounce, 1],[1/w_bounce, 1]));
+    % Wab = knob * ((1-beta)/rms_a_ref) * ...
+    %       tf(1, conv([1/w_bounce, 1],[1/w_bounce, 1]));
+    Wab = knob * ((1-beta)) * ...
+        tf(1, conv([1/w_bounce, 1],[1/w_bounce, 1]));
     Wab.u = "ab"; Wab.y = "e2";
 
     sdmeas = sumblk("y1 = sd+Wd2");

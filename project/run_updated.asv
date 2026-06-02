@@ -136,85 +136,85 @@ quartercar_openloop = quartercar(:,'r_dot');
 %% Analyze the road profile spectrum
 [road_sig, t, hsum] = roadprofile_fun(road_type, u0);
 
-% --- Time-domain stats ---
-fs = 1/(t(2)-t(1));   % temporal sampling frequency
-N  = length(hsum);
-
-fprintf('--- Road profile analysis: %s @ u0=%d m/s ---\n', road_type, u0);
-fprintf('Duration: %.2f s, samples: %d, fs: %.1f Hz\n', t(end), N, fs);
-fprintf('RMS displacement: %.4f m (%.2f mm)\n', rms(hsum), rms(hsum)*1000);
-fprintf('Peak abs displacement: %.4f m (%.2f mm)\n', max(abs(hsum)), max(abs(hsum))*1000);
-
-% --- Frequency-domain analysis ---
-% Use Welch's method for a smooth PSD estimate
-nwin = min(2^14, floor(N/4));
-[Pxx, f_psd] = pwelch(hsum - mean(hsum), hamming(nwin), nwin/2, [], fs);
-
-% --- Plot the road profile and its spectrum ---
-figure('WindowStyle','normal','Position',[100 100 1200 700]);
-
-% Time-domain
-subplot(2,2,1);
-plot(t, hsum*100, 'k');
-xlabel('Time (s)'); ylabel('Road height (cm)');
-title(sprintf('Road profile %s @ u0=%d m/s', road_type, u0));
-grid on;
-
-% Time-domain zoom — first 5 seconds
-subplot(2,2,2);
-idx_zoom = t <= min(5, t(end));
-plot(t(idx_zoom), hsum(idx_zoom)*100, 'k');
-xlabel('Time (s)'); ylabel('Road height (cm)');
-title('First 5 seconds (zoom)');
-grid on;
-
-% PSD on log-log
-subplot(2,2,3);
-w_psd = 2*pi*f_psd;       % temporal angular frequency (rad/s)
-loglog(w_psd, Pxx, 'b', 'LineWidth', 1.5); hold on;
-
-% Overlay the ISO 8608 theoretical shape for comparison
-% Temporal PSD = (Gh0 * V) / omega^2 (for spatial PSD = Gh0/n^2)
-[Gh0_iso, ~] = get_road_severity(road_type);
-omega_theo = w_psd(w_psd > 0.1);
-PSD_theo   = Gh0_iso * u0 ./ omega_theo.^2;
-loglog(omega_theo, PSD_theo, 'r--', 'LineWidth', 1.5);
-
-xlabel('Angular frequency \omega (rad/s)');
-ylabel('PSD (m^2 / (rad/s))');
-title('Road displacement PSD');
-xline(sqrt(ks/ms), 'k:', 'body bounce');
-xline(sqrt(kt/mu), 'm:', 'wheel hop');
-legend('Measured PSD','ISO 8608 1/\omega^2','body bounce','wheel hop',...
-       'Location','SouthWest');
-grid on;
-xlim([0.01, 1000]);
-
-% Cumulative RMS — shows where energy concentrates
-subplot(2,2,4);
-% Cumulative variance from 0 up to each frequency
-df_psd = mean(diff(f_psd));
-cum_var = cumsum(Pxx) * df_psd;
-cum_rms = sqrt(cum_var);
-total_rms = cum_rms(end);
-semilogx(w_psd, cum_rms*100, 'k', 'LineWidth', 1.5); hold on;
-
-% Mark frequencies that hold 50%, 90%, 95% of energy
-for thresh = [0.5, 0.9, 0.95]
-    idx_t = find(cum_rms >= thresh*total_rms, 1, 'first');
-    if ~isempty(idx_t)
-        w_thresh = w_psd(idx_t);
-        xline(w_thresh, 'r--', sprintf('%d%%', round(thresh*100)));
-        fprintf('  %2d%% of energy below %.3f rad/s (%.4f Hz)\n', ...
-                round(thresh*100), w_thresh, w_thresh/(2*pi));
-    end
-end
-
-xlabel('Angular frequency \omega (rad/s)');
-ylabel('Cumulative RMS (cm)');
-title('Where does energy concentrate?');
-grid on;
-xlim([0.01, 100]);
+% % --- Time-domain stats ---
+% fs = 1/(t(2)-t(1));   % temporal sampling frequency
+% N  = length(hsum);
+% 
+% fprintf('--- Road profile analysis: %s @ u0=%d m/s ---\n', road_type, u0);
+% fprintf('Duration: %.2f s, samples: %d, fs: %.1f Hz\n', t(end), N, fs);
+% fprintf('RMS displacement: %.4f m (%.2f mm)\n', rms(hsum), rms(hsum)*1000);
+% fprintf('Peak abs displacement: %.4f m (%.2f mm)\n', max(abs(hsum)), max(abs(hsum))*1000);
+% 
+% % --- Frequency-domain analysis ---
+% % Use Welch's method for a smooth PSD estimate
+% nwin = min(2^14, floor(N/4));
+% [Pxx, f_psd] = pwelch(hsum - mean(hsum), hamming(nwin), nwin/2, [], fs);
+% 
+% % --- Plot the road profile and its spectrum ---
+% figure('WindowStyle','normal','Position',[100 100 1200 700]);
+% 
+% % Time-domain
+% subplot(2,2,1);
+% plot(t, hsum*100, 'k');
+% xlabel('Time (s)'); ylabel('Road height (cm)');
+% title(sprintf('Road profile %s @ u0=%d m/s', road_type, u0));
+% grid on;
+% 
+% % Time-domain zoom — first 5 seconds
+% subplot(2,2,2);
+% idx_zoom = t <= min(5, t(end));
+% plot(t(idx_zoom), hsum(idx_zoom)*100, 'k');
+% xlabel('Time (s)'); ylabel('Road height (cm)');
+% title('First 5 seconds (zoom)');
+% grid on;
+% 
+% % PSD on log-log
+% subplot(2,2,3);
+% w_psd = 2*pi*f_psd;       % temporal angular frequency (rad/s)
+% loglog(w_psd, Pxx, 'b', 'LineWidth', 1.5); hold on;
+% 
+% % Overlay the ISO 8608 theoretical shape for comparison
+% % Temporal PSD = (Gh0 * V) / omega^2 (for spatial PSD = Gh0/n^2)
+% [Gh0_iso, ~] = get_road_severity(road_type);
+% omega_theo = w_psd(w_psd > 0.1);
+% PSD_theo   = Gh0_iso * u0 ./ omega_theo.^2;
+% loglog(omega_theo, PSD_theo, 'r--', 'LineWidth', 1.5);
+% 
+% xlabel('Angular frequency \omega (rad/s)');
+% ylabel('PSD (m^2 / (rad/s))');
+% title('Road displacement PSD');
+% xline(sqrt(ks/ms), 'k:', 'body bounce');
+% xline(sqrt(kt/mu), 'm:', 'wheel hop');
+% legend('Measured PSD','ISO 8608 1/\omega^2','body bounce','wheel hop',...
+%        'Location','SouthWest');
+% grid on;
+% xlim([0.01, 1000]);
+% 
+% % Cumulative RMS — shows where energy concentrates
+% subplot(2,2,4);
+% % Cumulative variance from 0 up to each frequency
+% df_psd = mean(diff(f_psd));
+% cum_var = cumsum(Pxx) * df_psd;
+% cum_rms = sqrt(cum_var);
+% total_rms = cum_rms(end);
+% semilogx(w_psd, cum_rms*100, 'k', 'LineWidth', 1.5); hold on;
+% 
+% % Mark frequencies that hold 50%, 90%, 95% of energy
+% for thresh = [0.5, 0.9, 0.95]
+%     idx_t = find(cum_rms >= thresh*total_rms, 1, 'first');
+%     if ~isempty(idx_t)
+%         w_thresh = w_psd(idx_t);
+%         xline(w_thresh, 'r--', sprintf('%d%%', round(thresh*100)));
+%         fprintf('  %2d%% of energy below %.3f rad/s (%.4f Hz)\n', ...
+%                 round(thresh*100), w_thresh, w_thresh/(2*pi));
+%     end
+% end
+% 
+% xlabel('Angular frequency \omega (rad/s)');
+% ylabel('Cumulative RMS (cm)');
+% title('Where does energy concentrate?');
+% grid on;
+% xlim([0.01, 100]);
 
 %% time simulation for open-loop
 [y_ol_a,~] = lsim(quartercar('body acceleration','r_dot'), rdot_iso, t);
@@ -384,8 +384,8 @@ legend(sprintf('OL (%.4f)',   rms(y_rs_ol)*100), ...
 xlim([10, 15]);   % show only t = 10 to 20 seconds
 %% further analysis
 % GET REF RMS
-ref_road = 'Type C';
-u0_ref = get_speed_for_road(road_type);
+ref_road = 'Type D';
+u0_ref = get_speed_for_road(ref_road);
 [~, t_ref, hsum_ref] = roadprofile_fun(ref_road, u0_ref);
 dt_ref = t_ref(2)-t_ref(1);
 rdot_ref = [diff(hsum_ref)./dt_ref, 0];
@@ -395,14 +395,15 @@ rms_a_ref = rms(yab_ref);
 rms_s_ref = rms(yrs_ref);
 
 [cl_hinf_A, K_A, gamma_out_A, qcar_open_A, info_A, rdot_iso_A, r_iso_A] = ...
-    design_hinf_for_road('Type A',rms_a_ref,rms_s_ref, 30); % synthsize A
+    design_hinf_for_road('Type C',rms_a_ref,rms_s_ref, 8); % synthsize A
 [cl_hinf_D, K_D, gamma_out_D, qcar_open_D, info_D, rdot_iso_D, r_iso_D] = ...
-    design_hinf_for_road('Type D',rms_a_ref,rms_s_ref, 4); % synthsize D
-road_compare = 'Type A';
-if road_compare=='Type A'
+    design_hinf_for_road('Type F',rms_a_ref,rms_s_ref, 4); % synthsize D
+
+road_compare = 'Type D';
+if road_compare=='Type C'
     r_dot_iso_compare = rdot_iso_A;
     r_iso_compare = r_iso_A;
-elseif road_compare=='Type D'
+elseif road_compare=='Type F'
     r_dot_iso_compare = rdot_iso_D;
     r_iso_compare = r_iso_D;
 end
@@ -521,11 +522,14 @@ function [cl_hinf, K, gamma_out, qcar_open, info, rdot_iso, r_iso] = design_hinf
     Wd2 = ss(0.01); Wd2.u = "d2"; Wd2.y = "Wd2";
     Wd3 = ss(0.5);  Wd3.u = "d3"; Wd3.y = "Wd3";
 
-    Wsd = knob * (beta/rms_rs_ref) * tf(1, [1/w_bounce, 1]);
+    % Wsd = knob * (beta/rms_rs_ref) * tf(1, [1/w_bounce, 1]);
+    Wsd = knob * (beta) * tf(1, [1/w_bounce, 1]);
     Wsd.u = "sd"; Wsd.y = "e3";
 
-    Wab = knob * ((1-beta)/rms_a_ref) * ...
-          tf(1, conv([1/w_bounce, 1],[1/w_bounce, 1]));
+    % Wab = knob * ((1-beta)/rms_a_ref) * ...
+    %       tf(1, conv([1/w_bounce, 1],[1/w_bounce, 1]));
+    Wab = knob * ((1-beta)) * ...
+        tf(1, conv([1/w_bounce, 1],[1/w_bounce, 1]));
     Wab.u = "ab"; Wab.y = "e2";
 
     sdmeas = sumblk("y1 = sd+Wd2");
