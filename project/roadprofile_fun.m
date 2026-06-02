@@ -1,4 +1,4 @@
-function [road_sig, t, hsum] = roadprofile_fun(road_type, u0)
+function [road_sig, t, hsum, Gh0] = roadprofile_fun(road_type, u0)
 % GENERATE_ROAD_PROFILE generates a road disturbance timeseries
 %
 % Inputs:

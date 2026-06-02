@@ -1,11 +1,10 @@
-clf;
 clear all; clc;
 %% active suspension model used in butsuen
 % for LQR control extended for h-infinity synthesis
 % states:
 %   x1 = zs-zu (rattle space)
 %   x2 = zs_dot (body velocity)
-%   x3 = zu-zr (tire displacement)
+%   x3 = zu-zr (tire deflection)
 %   x4 = zu_dot (tire velocity)
 % inputs:
 %   u: actuator force
@@ -16,15 +15,56 @@ clear all; clc;
 % virtual outputs:
 %   z1 = zs_dot_dot (body acceleration)
 %   z2 = zs-zu (=x1) (rattle space)
-%% generate road profile at nominal speed V=25 m/s (used for original plots)
-% roadprofile.m must have u0=25 and q=100
-u0 = 25; road_type = 'Type A';
+%% init.s
+close all;
+set(groot, 'DefaultFigureWindowStyle', 'docked');
+%% generate road profile
+road_type = 'Type D';
+switch road_type
+    % ── ISO 8608 Standard Classes ──────────────────────────────────
+    case 'Type A',  u0 = 33;
+    case 'Type B',  u0 = 30;
+    case 'Type C',  u0 = 25;
+    case 'Type D',  u0 = 20;
+    case 'Type E',  u0 = 15;
+    case 'Type F',  u0 = 10;
+    case 'Type G',  u0 = 7;
+    case 'Type H',  u0 = 5;
+        % ── Airfield ───────────────────────────────────────────────────
+    case 'Smooth airfield runway', u0 = 33;
+    case 'Rough airfield runway',  u0 = 20;
+        % ── Paved Roads ────────────────────────────────────────────────
+    case 'Tarmac motorway',        u0 = 33;
+    case 'Concrete motorway',      u0 = 33;
+    case 'Good road',              u0 = 30;
+    case 'Smooth highway',         u0 = 30;
+    case 'Average road',           u0 = 25;
+    case 'Minor road',             u0 = 20;
+    case 'Highway with gravel',    u0 = 18;
+    case 'Poor road',              u0 = 15;
+    case 'Very rough unmade road', u0 = 10;
+        % ── Off-road ───────────────────────────────────────────────────
+    case 'Pasture',                        u0 = 12;
+    case 'Cross country medium roughness', u0 = 8;
+    case 'Grassland',                      u0 = 8;
+    case 'Rocky Soil',                     u0 = 5;
+    case 'Cross country severe',           u0 = 4;
+        % ── Test Courses ───────────────────────────────────────────────
+    case 'Random Test Course', u0 = 8;
+    case 'Rocky Test Course',  u0 = 5;
+    otherwise
+        error('Unknown road type: "%s"', road_type);
+end
 [road_sig, t, hsum] = roadprofile_fun(road_type, u0);
+rms_road = rms(hsum);
+r_iso = hsum(1:length(t));          % road displacement [m]
 dt     = t(2) - t(1);
 rdot_raw = [diff(hsum)./dt, 0];
-fs_sig = 1/dt;
-[b_lp,a_lp] = butter(4, 50/(fs_sig/2), 'low');
-rdot_iso = filtfilt(b_lp, a_lp, rdot_raw);
+% fs_sig = 1/dt;
+% [b_lp,a_lp] = butter(4, 50/(fs_sig/2), 'low');
+% rdot_iso = filtfilt(b_lp, a_lp, rdot_raw);
+rdot_iso = rdot_raw;
+
 %% define parameters
 params = 'nom';
 if strcmp(params,'bd')
@@ -59,6 +99,13 @@ elseif strcmp(params,'truck')
     ks = 150000 ; % N/m
     kt = 800000; % N/m
     bt = 0;      % N/m/s
+elseif strcmp(params,'sunlusoy')
+    ms = 250;    % kg
+    mu = 35;     % kg
+    bs = 800;   % N/m/s
+    ks = 15000 ; % N/m
+    kt = 120000; % N/m
+    bt = 0;      % N/m/s
 end
 
 % system dynamics
@@ -75,16 +122,101 @@ L = [0;...
     -1;...
     0];
 B_x = [B,L];
-C = [  A(2,:);...
-    1, 0, 0, 0];
+C = [A(2,:);...
+    1, 0, 0, 0;...
+    0, 0, 1, 0];
 D = [1/ms, 0;...
+    0,    0;...
     0,    0];
 quartercar = ss(A, B_x, C, D);
 quartercar.StateName = {'rattle space'; 'body velocity'; 'tire deflection'; 'tire velocity'};
 quartercar.InputName = {'fs','r_dot'};
-quartercar.OutputName = {'body acceleration'; 'rattle space'};
-quartercar_lqr = quartercar(:,'r_dot');
-%%
+quartercar.OutputName = {'body acceleration'; 'rattle space'; 'tire deflection'};
+quartercar_openloop = quartercar(:,'r_dot');
+%% Analyze the road profile spectrum
+[road_sig, t, hsum] = roadprofile_fun(road_type, u0);
+
+% --- Time-domain stats ---
+fs = 1/(t(2)-t(1));   % temporal sampling frequency
+N  = length(hsum);
+
+fprintf('--- Road profile analysis: %s @ u0=%d m/s ---\n', road_type, u0);
+fprintf('Duration: %.2f s, samples: %d, fs: %.1f Hz\n', t(end), N, fs);
+fprintf('RMS displacement: %.4f m (%.2f mm)\n', rms(hsum), rms(hsum)*1000);
+fprintf('Peak abs displacement: %.4f m (%.2f mm)\n', max(abs(hsum)), max(abs(hsum))*1000);
+
+% --- Frequency-domain analysis ---
+% Use Welch's method for a smooth PSD estimate
+nwin = min(2^14, floor(N/4));
+[Pxx, f_psd] = pwelch(hsum - mean(hsum), hamming(nwin), nwin/2, [], fs);
+
+% --- Plot the road profile and its spectrum ---
+figure('WindowStyle','normal','Position',[100 100 1200 700]);
+
+% Time-domain
+subplot(2,2,1);
+plot(t, hsum*100, 'k');
+xlabel('Time (s)'); ylabel('Road height (cm)');
+title(sprintf('Road profile %s @ u0=%d m/s', road_type, u0));
+grid on;
+
+% Time-domain zoom — first 5 seconds
+subplot(2,2,2);
+idx_zoom = t <= min(5, t(end));
+plot(t(idx_zoom), hsum(idx_zoom)*100, 'k');
+xlabel('Time (s)'); ylabel('Road height (cm)');
+title('First 5 seconds (zoom)');
+grid on;
+
+% PSD on log-log
+subplot(2,2,3);
+w_psd = 2*pi*f_psd;       % temporal angular frequency (rad/s)
+loglog(w_psd, Pxx, 'b', 'LineWidth', 1.5); hold on;
+
+% Overlay the ISO 8608 theoretical shape for comparison
+% Temporal PSD = (Gh0 * V) / omega^2 (for spatial PSD = Gh0/n^2)
+[Gh0_iso, ~] = get_road_severity(road_type);
+omega_theo = w_psd(w_psd > 0.1);
+PSD_theo   = Gh0_iso * u0 ./ omega_theo.^2;
+loglog(omega_theo, PSD_theo, 'r--', 'LineWidth', 1.5);
+
+xlabel('Angular frequency \omega (rad/s)');
+ylabel('PSD (m^2 / (rad/s))');
+title('Road displacement PSD');
+xline(sqrt(ks/ms), 'k:', 'body bounce');
+xline(sqrt(kt/mu), 'm:', 'wheel hop');
+legend('Measured PSD','ISO 8608 1/\omega^2','body bounce','wheel hop',...
+       'Location','SouthWest');
+grid on;
+xlim([0.01, 1000]);
+
+% Cumulative RMS — shows where energy concentrates
+subplot(2,2,4);
+% Cumulative variance from 0 up to each frequency
+df_psd = mean(diff(f_psd));
+cum_var = cumsum(Pxx) * df_psd;
+cum_rms = sqrt(cum_var);
+total_rms = cum_rms(end);
+semilogx(w_psd, cum_rms*100, 'k', 'LineWidth', 1.5); hold on;
+
+% Mark frequencies that hold 50%, 90%, 95% of energy
+for thresh = [0.5, 0.9, 0.95]
+    idx_t = find(cum_rms >= thresh*total_rms, 1, 'first');
+    if ~isempty(idx_t)
+        w_thresh = w_psd(idx_t);
+        xline(w_thresh, 'r--', sprintf('%d%%', round(thresh*100)));
+        fprintf('  %2d%% of energy below %.3f rad/s (%.4f Hz)\n', ...
+                round(thresh*100), w_thresh, w_thresh/(2*pi));
+    end
+end
+
+xlabel('Angular frequency \omega (rad/s)');
+ylabel('Cumulative RMS (cm)');
+title('Where does energy concentrate?');
+grid on;
+xlim([0.01, 100]);
+
+%% time simulation for open-loop
 [y_ol_a,~] = lsim(quartercar('body acceleration','r_dot'), rdot_iso, t);
 [y_ol_s,~] = lsim(quartercar('rattle space','r_dot'),      rdot_iso, t);
 rms_a = rms(y_ol_a);
@@ -92,74 +224,435 @@ rms_s = rms(y_ol_s);
 rms_r = rms(rdot_iso);
 %% lqr design
 ro1 = 0.4; ro2 = 0.16; ro3 = 0.4; ro4 = 0.16;
+% ro1 = 400; ro2 = 16; ro3 = 400; ro4 = 16;
+% ro1 = 10^9; ro2 = 0; ro3 = 0; ro4 = 0;
+
 Q = [ks^2/ms^2+ro1, bs*ks/ms^2,    0,   -bs*ks/ms^2;...
-    bs*ks/ms^2,    bs^2/ms^2+ro2, 0,   -bs^2/ms^2;...
-    0,             0,             ro3, 0;...
-    -bs*ks/ms^2,   -bs^2/ms^2,    0,   bs^2/ms^2+ro4];
+    bs*ks/ms^2,    bs^2/ms^2+ro2,  0,   -bs^2/ms^2;...
+    0,             0,              ro3, 0;...
+    -bs*ks/ms^2,   -bs^2/ms^2,     0,   bs^2/ms^2+ro4];
 N = [-ks/ms^2;...
     -bs/ms^2;...
     0;
     bs/ms^2];
 R = 1/ms^2;
-K_lqr = lqr(quartercar(:,'r_dot'), Q, R, N);
-quartercar_cl_lqr = ss(A-B*K_lqr,L,C,D(:,2));
+K_lqr = lqr(A, B, Q, R, N);
+A_cl = A-B*K_lqr;
+C_cl = [A_cl(2,:);   % body acceleration — correct closed-loop expression
+    1, 0, 0, 0;  % rattle space — state x1, unchanged
+    0, 0, 1, 0]; % tire deflection — state x3, unchanged
+quartercar_cl_lqr = ss(A-B*K_lqr,L,C_cl,D(:,2));
 quartercar_cl_lqr.StateName = {'rattle space'; 'body velocity'; 'tire deflection'; 'tire velocity'};
 quartercar_cl_lqr.InputName = {'r_dot'};
-quartercar_cl_lqr.OutputName = {'body acceleration'; 'rattle space'};
-%% hinf — nominal design at V=25 m/s
-beta   = 0.05;
-V      = 25;   % nominal design speed — must match roadprofile.m u0
-tighten = 4;
+quartercar_cl_lqr.OutputName = {'body acceleration'; 'rattle space'; 'tire deflection'};
+%% hinf design
+% State matrices
+mb = ms; mw = mu;
+A = [ 0 1 0 0; [-ks -bs ks bs]/mb ; ...
+    0 0 0 1; [ks bs -ks-kt -bs]/mw];
+B = [ 0 0; 0 1e3/mb ; 0 0 ; [kt -1e3]/mw];
+C = [1 0 0 0; 1 0 -1 0; A(2,:)];
+D = [0 0; 0 0; B(2,:)];
 
-Wroad = tf(rms_r * sqrt(2), [1, 0.1]);
-Wroad.u = 'd1'; Wroad.y = 'r_dot';
+qcar = ss(A,B,C,D);
+qcar.StateName = ["body travel (m)";"body vel (m/s)";...
+    "wheel travel (m)";"wheel vel (m/s)"];
+qcar.InputName = ["r";"fs"];
+qcar.OutputName = ["xb";"sd";"ab"];
 
-Act = tf(1,1);
-Act.InputName = 'u'; Act.OutputName = 'fs';
+Act = tf(1,[1/60 1]);
+Act.InputName = "u";
+Act.OutputName = "fs";
 
-Wact = 0.05 * tf([1,5],[1,80]);
-Wact.u = 'u'; Wact.y = 'e1';
+% Wroad = ss(0.07);
+Wroad = ss(rms_road);
+Wroad.u = "d1";
+Wroad.y = "r";
 
-Wd2 = ss(0.01); Wd2.u = 'd2'; Wd2.y = 'Wd2';
-Wd3 = ss(0.01); Wd3.u = 'd3'; Wd3.y = 'Wd3';
+w_bounce = sqrt(ks/ms);     % ≈ 8.16 rad/s
+% Wact = 0.8*tf([1 50],[1 500]);
+% Wact = 0.01 * tf([1, w_bounce], [1, 80]);
+Wact = 0.05 * tf([1, w_bounce], [1, 80]);   % was 1e-6
+% Wact = 1e-6 * tf(1,1);
+Wact.u = "u";
+Wact.y = "e1";
 
-Wab = tighten*((1-beta)/rms_a) * tf([1/8, 1],[1/0.8, 1]);
-Wab.u = 'body acceleration'; Wab.y = 'e2';
+Wd2 = ss(0.01);
+Wd2.u = "d2";
+Wd2.y = "Wd2";
 
-Wsd = tighten*(beta/rms_s) * tf([1/8, 1],[1/80, 1]);
-Wsd.u = 'rattle space'; Wsd.y = 'e3';
+Wd3 = ss(0.5);
+Wd3.u = "d3";
+Wd3.y = "Wd3";
 
-sdmeas = sumblk('y1 = rattle space + Wd2');
-abmeas = sumblk('y2 = body acceleration + Wd3');
-ICinputs  = {'d1';'d2';'d3';'u'};
-ICoutputs = {'e1';'e2';'e3';'y1';'y2'};
+beta = 0.01;
+knob = 4;
+% Wsd = beta / HandlingTarget;
+% Wsd = 1e-6 * tf(1,1);            % suspension deflection — negligible penalty
+Wsd = knob * (beta/rms_s) * tf(1, [1/w_bounce, 1]);
+Wsd.u = "sd";
+Wsd.y = "e3";
 
-qcaric = connect(quartercar(1:2,:), Act, Wroad, Wact, Wab, Wsd, ...
-    Wd2, Wd3, sdmeas, abmeas, ICinputs, ICoutputs);
+% Wab = (1-beta) / ComfortTarget;
+% Wab = 1e-6 * tf(1,1);            % body acceleration — negligible penalty
+Wab = knob * ((1-beta)/rms_a) * tf(1, conv([1/w_bounce, 1],[1/w_bounce, 1]));
+Wab.u = "ab"; Wab.y = "e2";
 
-% K_hinf(:,:,1) corresponds to V=25 m/s (nominal)
-[K_hinf, ~, gamma] = hinfsyn(qcaric, 2, 1);
-fprintf('gamma (V=25): %.4f\n', gamma);
-
-K_hinf.InputName  = {'rattle space','body acceleration'};
-K_hinf.OutputName = {'u'};
-
-quartercar_cl_hinf = connect(quartercar, Act, K_hinf, ...
-    'r_dot', {'body acceleration';'rattle space'});
-%% bodes
-figure(1);
-bodemag(quartercar_lqr, 'b--');
-hold on
-bodemag(quartercar_cl_lqr,'r_dot'), 'r');
-% hold on
-% bodemag(quartercar_cl_hinf({'body acceleration';'rattle space'},'r_dot') , 'k');
+sdmeas  = sumblk("y1 = sd+Wd2");
+abmeas = sumblk("y2 = ab+Wd3");
+ICinputs = ["d1";"d2";"d3";"u"];
+ICoutputs = ["e1";"e2";"e3";"y1";"y2"];
+qcaric = connect(qcar(2:3,:),Act,Wroad,Wact,Wab,Wsd,Wd2,Wd3,...
+    sdmeas,abmeas,ICinputs,ICoutputs);
+ncont = 1; % one control signal, u
+nmeas = 2; % two measurement signals, sd and ab
+[K,~,gamma] = hinfsyn(qcaric,nmeas,ncont);
+disp('gamma = ');
+disp(gamma);
+% Closed-loop models
+K.u = ["sd","ab"];
+K.y = "u";
+quartercar_cl_hinf = connect(qcar,Act,K,"r",["xb";"sd";"ab"]);
+quartercar_cl_hinf = quartercar_cl_hinf([3,2,1],:);
+%% open-loop vs lqr bode
+figure(1); clf;
+opts = bodeoptions;
+opts.FreqUnits = 'Hz'; opts.MagScale  = 'log';        % this switches y-axis to 10^x format
+opts.MagUnits  = 'abs'; opts.YLim = [10^-6, 10^2];
+bodemag(quartercar_openloop, 'b--', opts); hold on
+bodemag(quartercar_cl_lqr,'r', opts); %hold on
 grid minor
-legend('Open-loop','LQR','hinf V=25','location','SouthEast')
-title('Bodes');
-% %% time simulations at V=25 (original — unchanged)
-% [y_ol, ~]      = lsim(quartercar('body acceleration','r_dot'), rdot_iso, t);
-% [y_lqr, ~]     = lsim(quartercar_cl_lqr('body acceleration','r_dot'), rdot_iso, t);
-% [y_hinf, ~]    = lsim(quartercar_cl_hinf('body acceleration','r_dot'), rdot_iso, t);
-% [y_ol_sd, ~]   = lsim(quartercar('rattle space','r_dot'), rdot_iso, t);
-% [y_lqr_sd, ~]  = lsim(quartercar_cl_lqr('rattle space','r_dot'), rdot_iso, t);
-% [y_hinf_sd, ~] = lsim(quartercar_cl_hinf('rattle space','r_dot'), rdot_iso, t);
+legend('Open-loop','LQR','location','SouthEast')
+title('Open-loop vs LQR Bode');
+xlim([0.01, 1000])
+%% open-loop vs h-infinity bode
+figure(2); clf;
+opts = bodeoptions;
+opts.FreqUnits = 'Hz'; opts.MagScale  = 'log';        % this switches y-axis to 10^x format
+opts.MagUnits  = 'abs'; opts.YLim = [10^-6, 10^3];
+bodemag(qcar(["sd","ab"],"r"), 'b--', opts); hold on
+bodemag(quartercar_cl_hinf(["sd","ab"],"r"), 'k');
+grid minor
+legend('Open-loop','H-infinity','location','SouthEast')
+title('Open-loop vs H-infiinty Bode');
+xlim([0.01, 1000])
+% bode method 2:
+% f=logspace(-2,3,100); w=2*pi*f;
+% j=sqrt(-1); s=j*w;clc
+% [T1,p1]=bode(A,L,C,D,1,w);
+% [Ta1,pa1]=bode(A-B*K_lqr,L,C,D,1,w);
+% for i=1:100
+%     T2(i)=T1(i,1)*s(i);
+%     Ta2(i)=Ta1(i,1)*s(i);
+% end
+% Tdb=20*log10(T2);
+% Tadb=20*log10(Ta2);
+% figure(2);
+% clf;
+% semilogx(f,Tdb,'b:',f,Tadb,'r-')
+% title('blue/dashed:Passive - red/full:Active');
+% xlabel('Frequency [Hz]');
+% ylabel('Transfer function [ydoubledot/y0dot]');
+%% time simulations
+[y_ab_ol, ~]      = lsim(quartercar('body acceleration','r_dot'), rdot_iso, t);
+[y_ab_lqr, ~]     = lsim(quartercar_cl_lqr('body acceleration','r_dot'), rdot_iso, t);
+[y_ab_hinf, ~]    = lsim(quartercar_cl_hinf('ab','r'), r_iso, t);
+[y_rs_ol, ~]   = lsim(quartercar('rattle space','r_dot'), rdot_iso, t);
+[y_rs_lqr, ~]  = lsim(quartercar_cl_lqr('rattle space','r_dot'), rdot_iso, t);
+[y_rs_hinf, ~] = lsim(quartercar_cl_hinf('sd','r'), r_iso, t);
+% figure(3); clf;
+fig = figure('WindowStyle','normal','Position',[100 100 900 600]);
+subplot(2,1,1);
+plot(t, y_ab_ol,  'b--','LineWidth',0.8); hold on;
+plot(t, y_ab_lqr, 'r',  'LineWidth',1.0);
+plot(t, y_ab_hinf,'k',  'LineWidth',1.0);
+title('Body Acceleration (Comfort)');
+ylabel('m/s^2'); grid on;
+legend(sprintf('OL (%.4f)',   rms(y_ab_ol)), ...
+    sprintf('LQR (%.4f)',  rms(y_ab_lqr)), ...
+    sprintf('H-inf (%.4f)',rms(y_ab_hinf)));
+xlim([10, 15]);   % show only t = 10 to 20 seconds
+subplot(2,1,2);
+plot(t, y_rs_ol*100,  'b--','LineWidth',0.8); hold on;
+plot(t, y_rs_lqr*100, 'r',  'LineWidth',1.0);
+plot(t, y_rs_hinf*100,'k',  'LineWidth',1.0);
+title('Suspension Deflection');
+ylabel('cm'); xlabel('Time (s)'); grid on;
+legend(sprintf('OL (%.4f)',   rms(y_rs_ol)*100), ...
+    sprintf('LQR (%.4f)',  rms(y_rs_lqr)*100), ...
+    sprintf('H-inf (%.4f)',rms(y_rs_hinf)*100));
+xlim([10, 15]);   % show only t = 10 to 20 seconds
+%% further analysis
+% GET REF RMS
+ref_road = 'Type C';
+u0_ref = get_speed_for_road(road_type);
+[~, t_ref, hsum_ref] = roadprofile_fun(ref_road, u0_ref);
+dt_ref = t_ref(2)-t_ref(1);
+rdot_ref = [diff(hsum_ref)./dt_ref, 0];
+[yab_ref,~] = lsim(quartercar('body acceleration','r_dot'), rdot_ref, t_ref);
+[yrs_ref,~] = lsim(quartercar('rattle space','r_dot'),      rdot_ref, t_ref);
+rms_a_ref = rms(yab_ref);
+rms_s_ref = rms(yrs_ref);
+
+[cl_hinf_A, K_A, gamma_out_A, qcar_open_A, info_A, rdot_iso_A, r_iso_A] = ...
+    design_hinf_for_road('Type A',rms_a_ref,rms_s_ref, 30); % synthsize A
+[cl_hinf_D, K_D, gamma_out_D, qcar_open_D, info_D, rdot_iso_D, r_iso_D] = ...
+    design_hinf_for_road('Type D',rms_a_ref,rms_s_ref, 4); % synthsize D
+road_compare = 'Type A';
+if road_compare=='Type A'
+    r_dot_iso_compare = rdot_iso_A;
+    r_iso_compare = r_iso_A;
+elseif road_compare=='Type D'
+    r_dot_iso_compare = rdot_iso_D;
+    r_iso_compare = r_iso_D;
+end
+% time sim.s:
+[y_ab_ol, ~]      = lsim(quartercar('body acceleration','r_dot'), r_dot_iso_compare, t);
+[y_ab_hinfA, ~]     = lsim(cl_hinf_A('ab','r'), r_iso_compare, t);
+[y_ab_hinfD, ~]    = lsim(cl_hinf_D('ab','r'), r_iso_compare, t);
+[y_rs_ol, ~]   = lsim(quartercar('rattle space','r_dot'), r_dot_iso_compare, t);
+[y_rs_hinfA, ~]  = lsim(cl_hinf_A('sd','r'), r_iso_compare, t);
+[y_rs_hinfD, ~] = lsim(cl_hinf_D('sd','r'), r_iso_compare, t);
+fig = figure('WindowStyle','normal','Position',[100 100 900 600]);
+subplot(2,1,1);
+plot(t, y_ab_ol,  'b--','LineWidth',0.8); hold on;
+plot(t, y_ab_hinfA, 'r',  'LineWidth',1.0);
+plot(t, y_ab_hinfD,'k',  'LineWidth',1.0);
+title('Body Acceleration (Comfort)');
+ylabel('m/s^2'); grid on;
+legend(sprintf('OL (%.4f)',   rms(y_ab_ol)), ...
+    sprintf('HinfA (%.4f)',  rms(y_ab_hinfA)), ...
+    sprintf('HinfD (%.4f)',rms(y_ab_hinfD)));
+xlim([10, 15]);   % show only t = 10 to 20 seconds
+subplot(2,1,2);
+plot(t, y_rs_ol*100,  'b--','LineWidth',0.8); hold on;
+plot(t, y_rs_hinfA*100, 'r',  'LineWidth',1.0);
+plot(t, y_rs_hinfD*100,'k',  'LineWidth',1.0);
+title('Suspension Deflection');
+ylabel('cm'); xlabel('Time (s)'); grid on;
+legend(sprintf('OL (%.4f)',   rms(y_rs_ol)*100), ...
+    sprintf('HinfA (%.4f)',  rms(y_rs_hinfA)*100), ...
+    sprintf('HinfD (%.4f)',rms(y_rs_hinfD)*100));
+xlim([10, 15]);   % show only t = 10 to 20 seconds
+%% helpers
+function [cl_hinf, K, gamma_out, qcar_open, info, rdot_iso, r_iso] = design_hinf_for_road(road_type, rms_a_ref, rms_rs_ref, knob, params)
+% DESIGN_HINF_FOR_ROAD  Synthesise an H-infinity controller for a given ISO road class.
+%
+%   [cl_hinf, K, gamma_out, qcar_open, info] = design_hinf_for_road(road_type)
+%   [cl_hinf, K, gamma_out, qcar_open, info] = design_hinf_for_road(road_type, params)
+%
+%   Inputs:
+%     road_type : string, e.g. 'Type A' ... 'Type H', 'Average road', etc.
+%     params    : (optional) vehicle parameter set: 'bd' (default), 'nom',
+%                 'suv', 'truck', 'sunlusoy'.
+%
+%   Outputs:
+%     cl_hinf   : closed-loop ss from road displacement r to outputs
+%                 [ab; sd; xb] (body acceleration, suspension deflection, body travel)
+%     K         : the H-infinity controller (inputs: sd, ab ; output: u)
+%     gamma_out : achieved H-infinity norm
+%     qcar_open : open-loop displacement-input plant ss
+%     info      : struct with fields {road_type, u0, t, r_iso, hsum,
+%                                     rms_road, rms_a, rms_s, ms, mu, ks, kt, bs, bt}
+
+    if nargin < 5 || isempty(params)
+        params = 'nom';
+    end
+
+    % --- 1) Speed for this road class ---
+    u0 = get_speed_for_road(road_type); V = u0;
+    % --- 2) Road profile ---
+    [~, t, hsum, Gh0] = roadprofile_fun(road_type, u0);
+    rms_road = rms(hsum);
+    r_iso    = hsum(1:length(t));
+    dt       = t(2) - t(1);
+    rdot_iso = [diff(hsum)./dt, 0];
+
+    % --- 3) Vehicle parameters ---
+    [ms, mu, bs, ks, kt, bt] = get_vehicle_params(params);   
+
+    % --- 5) Displacement-input plant for H-infinity synthesis ---
+    A = [ 0 1 0 0; ...
+          [-ks -bs ks bs]/ms; ...
+          0 0 0 1; ...
+          [ks bs -ks-kt -bs]/mu];
+    B = [ 0 0; 0 1e3/ms; 0 0; [kt -1e3]/mu];
+    C = [1 0 0 0; 1 0 -1 0; A(2,:)];
+    D = [0 0; 0 0; B(2,:)];
+
+    qcar_open = ss(A, B, C, D);
+    qcar_open.StateName  = ["body travel (m)";"body vel (m/s)"; ...
+                            "wheel travel (m)";"wheel vel (m/s)"];
+    qcar_open.InputName  = ["r";"fs"];
+    qcar_open.OutputName = ["xb";"sd";"ab"];
+
+    w_bounce = sqrt(ks/ms);
+    beta = 0.01;
+
+    Act = tf(1,[1/60 1]);
+    Act.InputName = "u"; Act.OutputName = "fs";
+
+    % Wroad
+    % w_break = 6.136*V/V_ref*1.2;
+    w_wheel_hop = sqrt(kt/mu);   % ~ 67 rad/s
+    w_break = max(10*(V/33), w_wheel_hop * 1.5);
+    % w_break = 12;
+    type_w_road = 4;
+    if type_w_road==1
+        Wroad = ss(0.2);
+    elseif type_w_road==2
+        Wroad = ss(rms_road);
+    elseif type_w_road==3
+        Wroad = tf(sqrt(Gh0 * V) * w_break, [1, w_break]);
+    elseif type_w_road==4
+        n0 = 0.1; n1 = 0.01;
+        w0 = 2*pi*n1*V;
+        num = 2*pi*n0*sqrt(Gh0*V);
+        Wroad = tf(num,[1 w0]);
+    end
+    Wroad.u = "d1"; Wroad.y = "r";
+    
+    % Wact
+    Wact = 0.05 * tf([1, w_bounce], [1, 80]);   % was 1e-6
+    % Wact = 0.02 * tf([1, w_bounce], [1, 80]);   % was 1e-6
+    % Wact = 1e-6 * tf(1,1);
+    Wact.u = "u"; Wact.y = "e1";
+
+    Wd2 = ss(0.01); Wd2.u = "d2"; Wd2.y = "Wd2";
+    Wd3 = ss(0.5);  Wd3.u = "d3"; Wd3.y = "Wd3";
+
+    Wsd = knob * (beta/rms_rs_ref) * tf(1, [1/w_bounce, 1]);
+    Wsd.u = "sd"; Wsd.y = "e3";
+
+    Wab = knob * ((1-beta)/rms_a_ref) * ...
+          tf(1, conv([1/w_bounce, 1],[1/w_bounce, 1]));
+    Wab.u = "ab"; Wab.y = "e2";
+
+    sdmeas = sumblk("y1 = sd+Wd2");
+    abmeas = sumblk("y2 = ab+Wd3");
+    ICinputs  = ["d1";"d2";"d3";"u"];
+    ICoutputs = ["e1";"e2";"e3";"y1";"y2"];
+
+    qcaric = connect(qcar_open(2:3,:), Act, Wroad, Wact, Wab, Wsd, ...
+                     Wd2, Wd3, sdmeas, abmeas, ICinputs, ICoutputs);
+
+    % --- 7) Synthesis ---
+    [K, ~, gamma_out] = hinfsyn(qcaric, 2, 1);
+    K.u = ["sd","ab"]; K.y = "u";
+    % K = balred(K, 6);   % reduce 10-state controller to 6 states
+    % --- 8) Closed-loop with outputs reordered to [ab; sd; xb] ---
+    cl_hinf = connect(qcar_open, Act, K, "r", ["xb";"sd";"ab"]);
+    cl_hinf = cl_hinf([3,2,1], :);
+
+    % --- 9) Bundle info ---
+    info.road_type = road_type;
+    info.u0        = u0;
+    info.t         = t;
+    info.r_iso     = r_iso;
+    info.hsum      = hsum;
+    info.rms_road  = rms_road;
+    info.rms_a_ref     = rms_a_ref;
+    info.rms_rs_ref     = rms_rs_ref;
+    info.ms = ms; info.mu = mu; info.ks = ks; info.kt = kt;
+    info.bs = bs; info.bt = bt;
+end
+
+% =========================================================================
+function u0 = get_speed_for_road(road_type)
+    switch road_type
+        case 'Type A',  u0 = 33;
+        case 'Type B',  u0 = 30;
+        case 'Type C',  u0 = 25;
+        case 'Type D',  u0 = 20;
+        case 'Type E',  u0 = 15;
+        case 'Type F',  u0 = 10;
+        case 'Type G',  u0 = 7;
+        case 'Type H',  u0 = 5;
+        case 'Smooth airfield runway',          u0 = 33;
+        case 'Rough airfield runway',           u0 = 20;
+        case 'Tarmac motorway',                 u0 = 33;
+        case 'Concrete motorway',               u0 = 33;
+        case 'Good road',                       u0 = 30;
+        case 'Smooth highway',                  u0 = 30;
+        case 'Average road',                    u0 = 25;
+        case 'Minor road',                      u0 = 20;
+        case 'Highway with gravel',             u0 = 18;
+        case 'Poor road',                       u0 = 15;
+        case 'Very rough unmade road',          u0 = 10;
+        case 'Pasture',                         u0 = 12;
+        case 'Cross country medium roughness',  u0 = 8;
+        case 'Grassland',                       u0 = 8;
+        case 'Rocky Soil',                      u0 = 5;
+        case 'Cross country severe',            u0 = 4;
+        case 'Random Test Course',              u0 = 8;
+        case 'Rocky Test Course',               u0 = 5;
+        otherwise
+            error('Unknown road type: "%s"', road_type);
+    end
+end
+
+function [Gh0, V] = get_road_severity(road_type)
+% GET_ROAD_SEVERITY  Returns ISO 8608 unevenness index Gh0 and default
+% vehicle speed V for a given road type.
+%
+%   Gh0 : displacement PSD level at reference angular frequency [m^3/rad]
+%   V   : recommended vehicle speed [m/s]
+
+    switch road_type
+        % ── ISO 8608 Standard Classes ──────────────────────────────────
+        case 'Type A',  Gh0 = 1     * 1e-6; V = 33;
+        case 'Type B',  Gh0 = 4     * 1e-6; V = 30;
+        case 'Type C',  Gh0 = 16    * 1e-6; V = 25;
+        case 'Type D',  Gh0 = 64    * 1e-6; V = 20;
+        case 'Type E',  Gh0 = 256   * 1e-6; V = 15;
+        case 'Type F',  Gh0 = 1024  * 1e-6; V = 10;
+        case 'Type G',  Gh0 = 4096  * 1e-6; V = 7;
+        case 'Type H',  Gh0 = 16384 * 1e-6; V = 5;
+
+        % ── Airfield ───────────────────────────────────────────────────
+        case 'Smooth airfield runway', Gh0 = (4.3e-11)/(2*pi); V = 33;
+        case 'Rough airfield runway',  Gh0 = (8.1e-6) /(2*pi); V = 20;
+
+        % ── Paved Roads ────────────────────────────────────────────────
+        case 'Tarmac motorway',        Gh0 = (6.45e-8)/(2*pi); V = 33;
+        case 'Concrete motorway',      Gh0 = (2.14e-7)/(2*pi); V = 33;
+        case 'Good road',              Gh0 = (3.0e-7) /(2*pi); V = 30;
+        case 'Smooth highway',         Gh0 = (4.8e-7) /(2*pi); V = 30;
+        case 'Average road',           Gh0 = (2.0e-6) /(2*pi); V = 25;
+        case 'Minor road',             Gh0 = (4.39e-6)/(2*pi); V = 20;
+        case 'Highway with gravel',    Gh0 = (4.4e-6) /(2*pi); V = 18;
+        case 'Poor road',              Gh0 = (1.5e-5) /(2*pi); V = 15;
+        case 'Very rough unmade road', Gh0 = (5.17e-5)/(2*pi); V = 10;
+
+        % ── Off-road ───────────────────────────────────────────────────
+        case 'Pasture',                        Gh0 = (1.2e-5) /(2*pi); V = 12;
+        case 'Cross country medium roughness', Gh0 = (3.16e-5)/(2*pi); V = 8;
+        case 'Grassland',                      Gh0 = (4.98e-5)/(2*pi); V = 8;
+        case 'Rocky Soil',                     Gh0 = (2.34e-4)/(2*pi); V = 5;
+        case 'Cross country severe',           Gh0 = (3.6e-4) /(2*pi); V = 4;
+
+        % ── Test Courses ───────────────────────────────────────────────
+        case 'Random Test Course', Gh0 = (3.44e-4)/(2*pi); V = 8;
+        case 'Rocky Test Course',  Gh0 = (1.01e-3)/(2*pi); V = 5;
+
+        otherwise
+            error('Unknown road type: "%s"', road_type);
+    end
+end
+% =========================================================================
+function [ms, mu, bs, ks, kt, bt] = get_vehicle_params(params)
+    switch params
+        case 'bd'
+            ms = 300; mu = 60;  bs = 1000; ks = 16000;  kt = 190000; bt = 0;
+        case 'nom'
+            ms = 240; mu = 36;  bs = 1000; ks = 16000;  kt = 160000; bt = 0;
+        case 'suv'
+            ms = 600; mu = 60;  bs = 3000; ks = 20000;  kt = 180000; bt = 0;
+        case 'truck'
+            ms = 4000; mu = 200; bs = 8000; ks = 150000; kt = 800000; bt = 0;
+        case 'sunlusoy'
+            ms = 250; mu = 35;  bs = 800;  ks = 15000;  kt = 120000; bt = 0;
+        otherwise
+            error('Unknown params: "%s"', params);
+    end
+end
