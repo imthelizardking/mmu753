@@ -245,6 +245,22 @@ quartercar_cl_lqr = ss(A-B*K_lqr,L,C_cl,D(:,2));
 quartercar_cl_lqr.StateName = {'rattle space'; 'body velocity'; 'tire deflection'; 'tire velocity'};
 quartercar_cl_lqr.InputName = {'r_dot'};
 quartercar_cl_lqr.OutputName = {'body acceleration'; 'rattle space'; 'tire deflection'};
+%% temp lqr analysis
+% Build a separate system that outputs the control force
+A_cl = A - B*K_lqr;
+C_u  = -K_lqr;       % u = -K_lqr * x
+D_u  = 0;            % no feedthrough from r_dot to u (L doesn't affect u directly)
+
+sys_lqr_u = ss(A_cl, L, C_u, D_u);
+sys_lqr_u.InputName  = 'r_dot';
+sys_lqr_u.OutputName = 'u';
+
+% Simulate
+[u_lqr, ~] = lsim(sys_lqr_u, rdot_iso, t);
+
+fprintf('--- LQR control force ---\n');
+fprintf('  RMS:  %.2f N\n', rms(u_lqr));
+fprintf('  Peak: %.2f N\n', max(abs(u_lqr)));
 %% hinf design
 % State matrices
 mb = ms; mw = mu;
@@ -369,8 +385,8 @@ plot(t, y_ab_hinf,'k',  'LineWidth',1.0);
 title('Body Acceleration (Comfort)');
 ylabel('m/s^2'); grid on;
 legend(sprintf('OL (%.4f)',   rms(y_ab_ol)), ...
-    sprintf('LQR (%.4f)',  rms(y_ab_lqr)), ...
-    sprintf('H-inf (%.4f)',rms(y_ab_hinf)));
+       sprintf('LQR (%.4f)',  rms(y_ab_lqr)), ...
+       sprintf('H-inf (%.4f)',rms(y_ab_hinf)));
 xlim([10, 15]);   % show only t = 10 to 20 seconds
 subplot(2,1,2);
 plot(t, y_rs_ol*100,  'b--','LineWidth',0.8); hold on;
@@ -382,6 +398,7 @@ legend(sprintf('OL (%.4f)',   rms(y_rs_ol)*100), ...
     sprintf('LQR (%.4f)',  rms(y_rs_lqr)*100), ...
     sprintf('H-inf (%.4f)',rms(y_rs_hinf)*100));
 xlim([10, 15]);   % show only t = 10 to 20 seconds
+
 %% further analysis
 % GET REF RMS
 ref_road = 'Type D';
@@ -394,19 +411,29 @@ rdot_ref = [diff(hsum_ref)./dt_ref, 0];
 rms_a_ref = rms(yab_ref);
 rms_s_ref = rms(yrs_ref);
 
-[cl_hinf_A, K_A, gamma_out_A, qcar_open_A, info_A, rdot_iso_A, r_iso_A] = ...
-    design_hinf_for_road('Type C',rms_a_ref,rms_s_ref, 8); % synthsize A
-[cl_hinf_D, K_D, gamma_out_D, qcar_open_D, info_D, rdot_iso_D, r_iso_D] = ...
-    design_hinf_for_road('Type F',rms_a_ref,rms_s_ref, 4); % synthsize D
+[cl_hinf_A, K_A, gamma_out_A, qcar_open_A,...
+    info_A, rdot_iso_A, r_iso_A] = ...
+    design_hinf_for_road('Type A',...
+    rms_a_ref,rms_s_ref, 2.5); % synthsize A
+[cl_hinf_D, K_D, gamma_out_D, qcar_open_D,...
+    info_D, rdot_iso_D, r_iso_D] = ...
+    design_hinf_for_road('Type D',...
+    rms_a_ref,rms_s_ref, 5.2); % synthsize D
+% [cl_hinf_A, K_A, gamma_out_A, qcar_open_A,...
+%     info_A, rdot_iso_A, r_iso_A] = ...
+%     design_hinf_for_road('Type D',...
+%     rms_a_ref,rms_s_ref, 6); % synthsize A
+% [cl_hinf_D, K_D, gamma_out_D, qcar_open_D,...
+%     info_D, rdot_iso_D, r_iso_D] = ...
+%     design_hinf_for_road('Type F',...
+%     rms_a_ref,rms_s_ref, 4); % synthsize D
 
 road_compare = 'Type D';
-if road_compare=='Type C'
-    r_dot_iso_compare = rdot_iso_A;
-    r_iso_compare = r_iso_A;
-elseif road_compare=='Type F'
-    r_dot_iso_compare = rdot_iso_D;
-    r_iso_compare = r_iso_D;
-end
+u0_ = get_speed_for_road(road_compare);
+[~, t_, hsum_, Gh0_] = roadprofile_fun(road_compare, u0);
+r_iso_compare    = hsum_(1:length(t_));
+dt_       = t_(2) - t_(1);
+r_dot_iso_compare = [diff(hsum_)./dt_, 0];
 % time sim.s:
 [y_ab_ol, ~]      = lsim(quartercar('body acceleration','r_dot'), r_dot_iso_compare, t);
 [y_ab_hinfA, ~]     = lsim(cl_hinf_A('ab','r'), r_iso_compare, t);
@@ -435,6 +462,55 @@ legend(sprintf('OL (%.4f)',   rms(y_rs_ol)*100), ...
     sprintf('HinfA (%.4f)',  rms(y_rs_hinfA)*100), ...
     sprintf('HinfD (%.4f)',rms(y_rs_hinfD)*100));
 xlim([10, 15]);   % show only t = 10 to 20 seconds
+disp('gamma A:');
+disp(gamma_out_A);
+disp('gamma D:');
+disp(gamma_out_D);
+disp('Open loop RMS:');
+disp(rms(y_rs_ol)*100);
+disp('K_A RMS:');
+disp(rms(y_rs_hinfA)*100);
+disp('K_D RMS:');
+disp(rms(y_rs_hinfD)*100);
+%% hinf analysis rms force
+% K_D is the H∞ controller for Type D; qcar_open_D is its plant
+Act = tf(1,[1/60 1]);
+Act.InputName = "u"; Act.OutputName = "fs";
+
+sys_hinf_u = connect(qcar_open_D, Act, K_D, "r", "u");
+
+% Simulate on the same road as LQR's simulation
+[u_hinf, ~] = lsim(sys_hinf_u, r_iso, t);
+
+fprintf('--- H∞ K_D control force ---\n');
+fprintf('  RMS:  %.2f N\n', rms(u_hinf));
+fprintf('  Peak: %.2f N\n', max(abs(u_hinf)));
+%% hinf analysis rms 2
+% Method 1: extract u directly (what you did)
+sys_hinf_u = connect(qcar_open_D, Act, K_D, "r", "u");
+[u_hinf, ~] = lsim(sys_hinf_u, r_iso, t);
+fprintf('u (controller output) RMS: %.4f\n', rms(u_hinf));
+
+% Method 2: extract fs directly
+sys_hinf_fs = connect(qcar_open_D, Act, K_D, "r", "fs");
+[fs_hinf, ~] = lsim(sys_hinf_fs, r_iso, t);
+fprintf('fs (after actuator) RMS:  %.4f\n', rms(fs_hinf));
+
+% Method 3: actual force into the plant
+% Inside the plant, fs gets multiplied by 1e3/ms via the B matrix
+% So the equivalent Newton force is fs * 1e3
+fprintf('Actual force (fs*1e3) RMS: %.2f N\n', rms(fs_hinf)*1e3);
+
+% Sanity check: LQR force
+A_cl = A - B(:,1)*K_lqr;  % use the H∞ plant's A and B(:,1)?  
+% Actually use the LQR plant — let me re-do this carefully
+% LQR plant from your code:
+A_lqr_plant = [0, 1, 0, -1; -ks/ms, -bs/ms, 0, bs/ms; 0, 0, 0, 1; ks/mu, bs/mu, -kt/mu, -(bs+bt)/mu];
+B_lqr_plant = [0; 1/ms; 0; -1/mu];
+sys_lqr_u = ss(A_lqr_plant - B_lqr_plant*K_lqr, L, -K_lqr, 0);
+sys_lqr_u.InputName = 'r_dot'; sys_lqr_u.OutputName = 'u';
+[u_lqr, ~] = lsim(sys_lqr_u, rdot_iso, t);
+fprintf('LQR force RMS: %.2f N\n', rms(u_lqr));
 %% helpers
 function [cl_hinf, K, gamma_out, qcar_open, info, rdot_iso, r_iso] = design_hinf_for_road(road_type, rms_a_ref, rms_rs_ref, knob, params)
 % DESIGN_HINF_FOR_ROAD  Synthesise an H-infinity controller for a given ISO road class.
@@ -491,6 +567,7 @@ function [cl_hinf, K, gamma_out, qcar_open, info, rdot_iso, r_iso] = design_hinf
     beta = 0.01;
 
     Act = tf(1,[1/60 1]);
+    % Act = ss(1);
     Act.InputName = "u"; Act.OutputName = "fs";
 
     % Wroad
@@ -498,7 +575,7 @@ function [cl_hinf, K, gamma_out, qcar_open, info, rdot_iso, r_iso] = design_hinf
     w_wheel_hop = sqrt(kt/mu);   % ~ 67 rad/s
     w_break = max(10*(V/33), w_wheel_hop * 1.5);
     % w_break = 12;
-    type_w_road = 4;
+    type_w_road = 5;
     if type_w_road==1
         Wroad = ss(0.2);
     elseif type_w_road==2
@@ -510,6 +587,13 @@ function [cl_hinf, K, gamma_out, qcar_open, info, rdot_iso, r_iso] = design_hinf
         w0 = 2*pi*n1*V;
         num = 2*pi*n0*sqrt(Gh0*V);
         Wroad = tf(num,[1 w0]);
+    elseif type_w_road == 5
+        % Normalize so DC magnitude is always 0.02 (for example), shape depends on V:
+        n0 = 0.1; n1 = 0.01;
+        w0 = 2*pi*n1*V;
+        Wroad_target_dc = 0.02;   % fixed target
+        num = Wroad_target_dc * w0;
+        Wroad = tf(num, [1, w0]);
     end
     Wroad.u = "d1"; Wroad.y = "r";
     
@@ -521,14 +605,16 @@ function [cl_hinf, K, gamma_out, qcar_open, info, rdot_iso, r_iso] = design_hinf
 
     Wd2 = ss(0.01); Wd2.u = "d2"; Wd2.y = "Wd2";
     Wd3 = ss(0.5);  Wd3.u = "d3"; Wd3.y = "Wd3";
+    Gh0_ref = 16e-06;
+    scale_factor = sqrt(Gh0_ref / Gh0);
 
     % Wsd = knob * (beta/rms_rs_ref) * tf(1, [1/w_bounce, 1]);
-    Wsd = knob * (beta) * tf(1, [1/w_bounce, 1]);
+    Wsd = scale_factor * knob * (beta) * tf(1, [1/w_bounce, 1]);
     Wsd.u = "sd"; Wsd.y = "e3";
 
     % Wab = knob * ((1-beta)/rms_a_ref) * ...
     %       tf(1, conv([1/w_bounce, 1],[1/w_bounce, 1]));
-    Wab = knob * ((1-beta)) * ...
+    Wab = scale_factor * knob * ((1-beta)) * ...
         tf(1, conv([1/w_bounce, 1],[1/w_bounce, 1]));
     Wab.u = "ab"; Wab.y = "e2";
 
