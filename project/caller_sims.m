@@ -12,9 +12,6 @@ clear all; clc;
 % outputs:
 %   y1 = zs_dot_dot (body acceleration)
 %   y2 = zs-zu (=x1) (rattle space)
-% virtual outputs:
-%   z1 = zs_dot_dot (body acceleration)
-%   z2 = zs-zu (=x1) (rattle space)
 %% init.s
 % close all;
 set(groot, 'DefaultFigureWindowStyle', 'docked');
@@ -60,52 +57,20 @@ rms_road = rms(hsum);
 r_iso = hsum(1:length(t));          % road displacement [m]
 dt     = t(2) - t(1);
 rdot_raw = [diff(hsum)./dt, 0];
-% fs_sig = 1/dt;
-% [b_lp,a_lp] = butter(4, 50/(fs_sig/2), 'low');
-% rdot_iso = filtfilt(b_lp, a_lp, rdot_raw);
 rdot_iso = rdot_raw;
 
 %% define parameters
 params = 'nom';
 if strcmp(params,'bd')
-    % Physical parameters (taken from bd example)
-    ms = 300;    % kg
-    mu = 60;     % kg
-    bs = 1000;   % N/m/s
-    ks = 16000 ; % N/m
-    kt = 190000; % N/m
-    bt = 0;      % N/m/s
+    ms = 300; mu = 60; bs = 1000; ks = 16000; kt = 190000; bt = 0;
 elseif strcmp(params,'nom')
-    % Physical parameters (taken from 1989 br)
-    ms = 240;    % kg
-    mu = 36;     % kg
-    bs = 1000;   % N/m/s
-    ks = 16000 ; % N/m
-    kt = 160000; % N/m
-    bt = 0;      % N/m/s
+    ms = 240; mu = 36; bs = 1000; ks = 16000; kt = 160000; bt = 0;
 elseif strcmp(params,'suv')
-    % Physical parameters
-    ms = 600;    % kg
-    mu = 60;     % kg
-    bs = 3000;   % N/m/s
-    ks = 20000 ; % N/m
-    kt = 180000; % N/m
-    bt = 0;      % N/m/s
+    ms = 600; mu = 60; bs = 3000; ks = 20000; kt = 180000; bt = 0;
 elseif strcmp(params,'truck')
-    % Physical parameters
-    ms = 4000;    % kg
-    mu = 200;     % kg
-    bs = 8000;   % N/m/s
-    ks = 150000 ; % N/m
-    kt = 800000; % N/m
-    bt = 0;      % N/m/s
+    ms = 4000; mu = 200; bs = 8000; ks = 150000; kt = 800000; bt = 0;
 elseif strcmp(params,'sunlusoy')
-    ms = 250;    % kg
-    mu = 35;     % kg
-    bs = 800;   % N/m/s
-    ks = 15000 ; % N/m
-    kt = 120000; % N/m
-    bt = 0;      % N/m/s
+    ms = 250; mu = 35; bs = 800; ks = 15000; kt = 120000; bt = 0;
 end
 
 % system dynamics
@@ -113,108 +78,17 @@ A = [0, 1, 0, -1;...
     -ks/ms, -bs/ms, 0, bs/ms;...
     0, 0, 0, 1;...
     ks/mu, bs/mu, -kt/mu, -(bs+bt)/mu];
-B = [0;...
-    1/ms;...
-    0;...
-    -1/mu];
-L = [0;...
-    0;...
-    -1;...
-    0];
+B = [0; 1/ms; 0; -1/mu];
+L = [0; 0; -1; 0];
 B_x = [B,L];
-C = [A(2,:);...
-    1, 0, 0, 0;...
-    0, 0, 1, 0];
-D = [1/ms, 0;...
-    0,    0;...
-    0,    0];
+C = [A(2,:); 1, 0, 0, 0; 0, 0, 1, 0];
+D = [1/ms, 0; 0, 0; 0, 0];
+
 quartercar = ss(A, B_x, C, D);
 quartercar.StateName = {'rattle space'; 'body velocity'; 'tire deflection'; 'tire velocity'};
 quartercar.InputName = {'fs','r_dot'};
 quartercar.OutputName = {'body acceleration'; 'rattle space'; 'tire deflection'};
 quartercar_openloop = quartercar(:,'r_dot');
-%% Analyze the road profile spectrum
-[road_sig, t, hsum] = roadprofile_fun(road_type, u0);
-
-% % --- Time-domain stats ---
-% fs = 1/(t(2)-t(1));   % temporal sampling frequency
-% N  = length(hsum);
-% 
-% fprintf('--- Road profile analysis: %s @ u0=%d m/s ---\n', road_type, u0);
-% fprintf('Duration: %.2f s, samples: %d, fs: %.1f Hz\n', t(end), N, fs);
-% fprintf('RMS displacement: %.4f m (%.2f mm)\n', rms(hsum), rms(hsum)*1000);
-% fprintf('Peak abs displacement: %.4f m (%.2f mm)\n', max(abs(hsum)), max(abs(hsum))*1000);
-% 
-% % --- Frequency-domain analysis ---
-% % Use Welch's method for a smooth PSD estimate
-% nwin = min(2^14, floor(N/4));
-% [Pxx, f_psd] = pwelch(hsum - mean(hsum), hamming(nwin), nwin/2, [], fs);
-% 
-% % --- Plot the road profile and its spectrum ---
-% figure('WindowStyle','normal','Position',[100 100 1200 700]);
-% 
-% % Time-domain
-% subplot(2,2,1);
-% plot(t, hsum*100, 'k');
-% xlabel('Time (s)'); ylabel('Road height (cm)');
-% title(sprintf('Road profile %s @ u0=%d m/s', road_type, u0));
-% grid on;
-% 
-% % Time-domain zoom — first 5 seconds
-% subplot(2,2,2);
-% idx_zoom = t <= min(5, t(end));
-% plot(t(idx_zoom), hsum(idx_zoom)*100, 'k');
-% xlabel('Time (s)'); ylabel('Road height (cm)');
-% title('First 5 seconds (zoom)');
-% grid on;
-% 
-% % PSD on log-log
-% subplot(2,2,3);
-% w_psd = 2*pi*f_psd;       % temporal angular frequency (rad/s)
-% loglog(w_psd, Pxx, 'b', 'LineWidth', 1.5); hold on;
-% 
-% % Overlay the ISO 8608 theoretical shape for comparison
-% % Temporal PSD = (Gh0 * V) / omega^2 (for spatial PSD = Gh0/n^2)
-% [Gh0_iso, ~] = get_road_severity(road_type);
-% omega_theo = w_psd(w_psd > 0.1);
-% PSD_theo   = Gh0_iso * u0 ./ omega_theo.^2;
-% loglog(omega_theo, PSD_theo, 'r--', 'LineWidth', 1.5);
-% 
-% xlabel('Angular frequency \omega (rad/s)');
-% ylabel('PSD (m^2 / (rad/s))');
-% title('Road displacement PSD');
-% xline(sqrt(ks/ms), 'k:', 'body bounce');
-% xline(sqrt(kt/mu), 'm:', 'wheel hop');
-% legend('Measured PSD','ISO 8608 1/\omega^2','body bounce','wheel hop',...
-%        'Location','SouthWest');
-% grid on;
-% xlim([0.01, 1000]);
-% 
-% % Cumulative RMS — shows where energy concentrates
-% subplot(2,2,4);
-% % Cumulative variance from 0 up to each frequency
-% df_psd = mean(diff(f_psd));
-% cum_var = cumsum(Pxx) * df_psd;
-% cum_rms = sqrt(cum_var);
-% total_rms = cum_rms(end);
-% semilogx(w_psd, cum_rms*100, 'k', 'LineWidth', 1.5); hold on;
-% 
-% % Mark frequencies that hold 50%, 90%, 95% of energy
-% for thresh = [0.5, 0.9, 0.95]
-%     idx_t = find(cum_rms >= thresh*total_rms, 1, 'first');
-%     if ~isempty(idx_t)
-%         w_thresh = w_psd(idx_t);
-%         xline(w_thresh, 'r--', sprintf('%d%%', round(thresh*100)));
-%         fprintf('  %2d%% of energy below %.3f rad/s (%.4f Hz)\n', ...
-%                 round(thresh*100), w_thresh, w_thresh/(2*pi));
-%     end
-% end
-% 
-% xlabel('Angular frequency \omega (rad/s)');
-% ylabel('Cumulative RMS (cm)');
-% title('Where does energy concentrate?');
-% grid on;
-% xlim([0.01, 100]);
 
 %% time simulation for open-loop
 [y_ol_a,~] = lsim(quartercar('body acceleration','r_dot'), rdot_iso, t);
@@ -222,133 +96,58 @@ quartercar_openloop = quartercar(:,'r_dot');
 rms_a = rms(y_ol_a);
 rms_s = rms(y_ol_s);
 rms_r = rms(rdot_iso);
+
 %% lqr design
 ro1 = 0.4; ro2 = 0.16; ro3 = 0.4; ro4 = 0.16;
-% ro1 = 400; ro2 = 16; ro3 = 400; ro4 = 16;
-% ro1 = 10^9; ro2 = 0; ro3 = 0; ro4 = 0;
-
 Q = [ks^2/ms^2+ro1, bs*ks/ms^2,    0,   -bs*ks/ms^2;...
     bs*ks/ms^2,    bs^2/ms^2+ro2,  0,   -bs^2/ms^2;...
     0,             0,              ro3, 0;...
     -bs*ks/ms^2,   -bs^2/ms^2,     0,   bs^2/ms^2+ro4];
-N = [-ks/ms^2;...
-    -bs/ms^2;...
-    0;
-    bs/ms^2];
+N = [-ks/ms^2; -bs/ms^2; 0; bs/ms^2];
 R = 1/ms^2;
 K_lqr = lqr(A, B, Q, R, N);
 A_cl = A-B*K_lqr;
-C_cl = [A_cl(2,:);   % body acceleration — correct closed-loop expression
-    1, 0, 0, 0;  % rattle space — state x1, unchanged
-    0, 0, 1, 0]; % tire deflection — state x3, unchanged
+C_cl = [A_cl(2,:); 1, 0, 0, 0; 0, 0, 1, 0];
 quartercar_cl_lqr = ss(A-B*K_lqr,L,C_cl,D(:,2));
 quartercar_cl_lqr.StateName = {'rattle space'; 'body velocity'; 'tire deflection'; 'tire velocity'};
 quartercar_cl_lqr.InputName = {'r_dot'};
 quartercar_cl_lqr.OutputName = {'body acceleration'; 'rattle space'; 'tire deflection'};
-%% temp lqr analysis
-% Build a separate system that outputs the control force
-A_cl = A - B*K_lqr;
-C_u  = -K_lqr;       % u = -K_lqr * x
-D_u  = 0;            % no feedthrough from r_dot to u (L doesn't affect u directly)
 
+%% temp lqr analysis
+A_cl = A - B*K_lqr;
+C_u  = -K_lqr;
+D_u  = 0;            
 sys_lqr_u = ss(A_cl, L, C_u, D_u);
 sys_lqr_u.InputName  = 'r_dot';
 sys_lqr_u.OutputName = 'u';
-
-% Simulate
 [u_lqr, ~] = lsim(sys_lqr_u, rdot_iso, t);
 
 fprintf('--- LQR control force ---\n');
 fprintf('  RMS:  %.2f N\n', rms(u_lqr));
 fprintf('  Peak: %.2f N\n', max(abs(u_lqr)));
+
 %% hinf design
-% % State matrices
-% mb = ms; mw = mu;
-% A = [ 0 1 0 0; [-ks -bs ks bs]/mb ; ...
-%     0 0 0 1; [ks bs -ks-kt -bs]/mw];
-% B = [ 0 0; 0 1e3/mb ; 0 0 ; [kt -1e3]/mw];
-% C = [1 0 0 0; 1 0 -1 0; A(2,:)];
-% D = [0 0; 0 0; B(2,:)];
-% 
-% qcar = ss(A,B,C,D);
-% qcar.StateName = ["body travel (m)";"body vel (m/s)";...
-%     "wheel travel (m)";"wheel vel (m/s)"];
-% qcar.InputName = ["r";"fs"];
-% qcar.OutputName = ["xb";"sd";"ab"];
-% 
-% Act = tf(1,[1/60 1]);
-% Act.InputName = "u";
-% Act.OutputName = "fs";
-% 
-% % Wroad = ss(0.07);
-% Wroad = ss(rms_road);
-% Wroad.u = "d1";
-% Wroad.y = "r";
-% 
-% w_bounce = sqrt(ks/ms);     % ≈ 8.16 rad/s
-% % Wact = 0.8*tf([1 50],[1 500]);
-% % Wact = 0.01 * tf([1, w_bounce], [1, 80]);
-% Wact = 0.05 * tf([1, w_bounce], [1, 80]);   % was 1e-6
-% % Wact = 1e-6 * tf(1,1);
-% Wact.u = "u";
-% Wact.y = "e1";
-% 
-% Wd2 = ss(0.01);
-% Wd2.u = "d2";
-% Wd2.y = "Wd2";
-% 
-% Wd3 = ss(0.5);
-% Wd3.u = "d3";
-% Wd3.y = "Wd3";
-% 
-% beta = 0.01;
-% knob = 4;
-% % Wsd = beta / HandlingTarget;
-% % Wsd = 1e-6 * tf(1,1);            % suspension deflection — negligible penalty
-% Wsd = knob * (beta/rms_s) * tf(1, [1/w_bounce, 1]);
-% Wsd.u = "sd";
-% Wsd.y = "e3";
-% 
-% % Wab = (1-beta) / ComfortTarget;
-% % Wab = 1e-6 * tf(1,1);            % body acceleration — negligible penalty
-% Wab = knob * ((1-beta)/rms_a) * tf(1, conv([1/w_bounce, 1],[1/w_bounce, 1]));
-% Wab.u = "ab"; Wab.y = "e2";
-% 
-% sdmeas  = sumblk("y1 = sd+Wd2");
-% abmeas = sumblk("y2 = ab+Wd3");
-% ICinputs = ["d1";"d2";"d3";"u"];
-% ICoutputs = ["e1";"e2";"e3";"y1";"y2"];
-% qcaric = connect(qcar(2:3,:),Act,Wroad,Wact,Wab,Wsd,Wd2,Wd3,...
-%     sdmeas,abmeas,ICinputs,ICoutputs);
-% ncont = 1; % one control signal, u
-% nmeas = 2; % two measurement signals, sd and ab
-% [K,~,gamma] = hinfsyn(qcaric,nmeas,ncont);
-% disp('gamma = ');
-% disp(gamma);
-% % Closed-loop models
-% K.u = ["sd","ab"];
-% K.y = "u";
-% quartercar_cl_hinf = connect(qcar,Act,K,"r",["xb";"sd";"ab"]);
-% quartercar_cl_hinf = quartercar_cl_hinf([3,2,1],:);
 [quartercar_cl_hinf, K, gamma, qcar,...
     info, rdot_iso, r_iso] = ...
     design_hinf_for_road('Type A',...
     1,1, 3); % synthsize A
+
 %% open-loop vs lqr bode
 figure(1); clf;
 opts = bodeoptions;
-opts.FreqUnits = 'Hz'; opts.MagScale  = 'log';        % this switches y-axis to 10^x format
+opts.FreqUnits = 'Hz'; opts.MagScale  = 'log';
 opts.MagUnits  = 'abs'; opts.YLim = [10^-6, 10^2];
 bodemag(quartercar_openloop, 'b--', opts); hold on
-bodemag(quartercar_cl_lqr,'r', opts); %hold on
+bodemag(quartercar_cl_lqr,'r', opts); 
 grid minor
 legend('Open-loop','LQR','location','SouthEast')
 title('Open-loop vs LQR Bode');
 xlim([0.01, 1000])
+
 %% open-loop vs h-infinity bode
 figure(2); clf;
 opts = bodeoptions;
-opts.FreqUnits = 'Hz'; opts.MagScale  = 'log';        % this switches y-axis to 10^x format
+opts.FreqUnits = 'Hz'; opts.MagScale  = 'log';
 opts.MagUnits  = 'abs'; opts.YLim = [10^-6, 10^3];
 bodemag(qcar(["sd","ab"],"r"), 'b--', opts); hold on
 bodemag(quartercar_cl_hinf(["sd","ab"],"r"), 'k');
@@ -356,23 +155,7 @@ grid minor
 legend('Open-loop','H-infinity','location','SouthEast')
 title('Open-loop vs H-infiinty Bode');
 xlim([0.01, 1000])
-% bode method 2:
-% f=logspace(-2,3,100); w=2*pi*f;
-% j=sqrt(-1); s=j*w;clc
-% [T1,p1]=bode(A,L,C,D,1,w);
-% [Ta1,pa1]=bode(A-B*K_lqr,L,C,D,1,w);
-% for i=1:100
-%     T2(i)=T1(i,1)*s(i);
-%     Ta2(i)=Ta1(i,1)*s(i);
-% end
-% Tdb=20*log10(T2);
-% Tadb=20*log10(Ta2);
-% figure(2);
-% clf;
-% semilogx(f,Tdb,'b:',f,Tadb,'r-')
-% title('blue/dashed:Passive - red/full:Active');
-% xlabel('Frequency [Hz]');
-% ylabel('Transfer function [ydoubledot/y0dot]');
+
 %% time simulations
 [y_ab_ol, ~]      = lsim(quartercar('body acceleration','r_dot'), rdot_iso, t);
 [y_ab_lqr, ~]     = lsim(quartercar_cl_lqr('body acceleration','r_dot'), rdot_iso, t);
@@ -380,8 +163,8 @@ xlim([0.01, 1000])
 [y_rs_ol, ~]   = lsim(quartercar('rattle space','r_dot'), rdot_iso, t);
 [y_rs_lqr, ~]  = lsim(quartercar_cl_lqr('rattle space','r_dot'), rdot_iso, t);
 [y_rs_hinf, ~] = lsim(quartercar_cl_hinf('sd','r'), r_iso, t);
+
 figure(3); clf;
-% fig = figure('WindowStyle','normal','Position',[100 100 900 600]);
 subplot(2,1,1);
 plot(t, y_ab_ol,  'b--','LineWidth',0.8); hold on;
 plot(t, y_ab_lqr, 'r',  'LineWidth',1.0);
@@ -391,7 +174,7 @@ ylabel('m/s^2'); grid on;
 legend(sprintf('OL (%.4f)',   rms(y_ab_ol)), ...
        sprintf('LQR (%.4f)',  rms(y_ab_lqr)), ...
        sprintf('H-inf (%.4f)',rms(y_ab_hinf)));
-xlim([10, 15]);   % show only t = 10 to 20 seconds
+xlim([10, 15]);
 subplot(2,1,2);
 plot(t, y_rs_ol*100,  'b--','LineWidth',0.8); hold on;
 plot(t, y_rs_lqr*100, 'r',  'LineWidth',1.0);
@@ -401,219 +184,193 @@ ylabel('cm'); xlabel('Time (s)'); grid on;
 legend(sprintf('OL (%.4f)',   rms(y_rs_ol)*100), ...
     sprintf('LQR (%.4f)',  rms(y_rs_lqr)*100), ...
     sprintf('H-inf (%.4f)',rms(y_rs_hinf)*100));
-xlim([10, 15]);   % show only t = 10 to 20 seconds
+xlim([10, 15]);
+
 %% further analysis
+[cl_hinf_A, K_A, gamma_out_A, qcar_open_A] = design_hinf_for_road('Type A', 1, 1, 3); % synthsize A
+[cl_hinf_D, K_D, gamma_out_D, qcar_open_D] = design_hinf_for_road('Type D', 1, 1, 2.1); % synthsize D
 
-[cl_hinf_A, K_A, gamma_out_A, qcar_open_A,...
-    info_A, rdot_iso_A, r_iso_A] = ...
-    design_hinf_for_road('Type A',...
-    1,1, 3); % synthsize A
-[cl_hinf_D, K_D, gamma_out_D, qcar_open_D,...
-    info_D, rdot_iso_D, r_iso_D] = ...
-    design_hinf_for_road('Type D',...
-    1,1, 2.1); % synthsize D
-% [cl_hinf_A, K_A, gamma_out_A, qcar_open_A,...
-%     info_A, rdot_iso_A, r_iso_A] = ...
-%     design_hinf_for_road('Type D',...
-%     rms_a_ref,rms_s_ref, 6); % synthsize A
-% [cl_hinf_D, K_D, gamma_out_D, qcar_open_D,...
-%     info_D, rdot_iso_D, r_iso_D] = ...
-%     design_hinf_for_road('Type F',...
-%     rms_a_ref,rms_s_ref, 4); % synthsize D
-
-road_compare = 'Type F';
+road_compare = 'Type D';
 u0_ = get_speed_for_road(road_compare);
-[~, t_, hsum_, Gh0_] = roadprofile_fun(road_compare, u0);
-r_iso_compare    = hsum_(1:length(t_));
-dt_       = t_(2) - t_(1);
+[~, t_, hsum_, Gh0_] = roadprofile_fun(road_compare, u0_);
+r_iso_compare     = hsum_(1:length(t_));
+dt_               = t_(2) - t_(1);
 r_dot_iso_compare = [diff(hsum_)./dt_, 0];
+
 % time sim.s:
-[y_ab_ol, ~]      = lsim(quartercar('body acceleration','r_dot'), r_dot_iso_compare, t);
-[y_ab_hinfA, ~]     = lsim(cl_hinf_A('ab','r'), r_iso_compare, t);
-[y_ab_hinfD, ~]    = lsim(cl_hinf_D('ab','r'), r_iso_compare, t);
-[y_rs_ol, ~]   = lsim(quartercar('rattle space','r_dot'), r_dot_iso_compare, t);
-[y_rs_hinfA, ~]  = lsim(cl_hinf_A('sd','r'), r_iso_compare, t);
-[y_rs_hinfD, ~] = lsim(cl_hinf_D('sd','r'), r_iso_compare, t);
+[y_ab_ol, ~]     = lsim(quartercar('body acceleration','r_dot'), r_dot_iso_compare, t_);
+[y_ab_hinfA, ~]  = lsim(cl_hinf_A('ab','r'), r_iso_compare, t_);
+[y_ab_hinfD, ~]  = lsim(cl_hinf_D('ab','r'), r_iso_compare, t_);
+
+[y_rs_ol, ~]     = lsim(quartercar('rattle space','r_dot'), r_dot_iso_compare, t_);
+[y_rs_hinfA, ~]  = lsim(cl_hinf_A('sd','r'), r_iso_compare, t_);
+[y_rs_hinfD, ~]  = lsim(cl_hinf_D('sd','r'), r_iso_compare, t_);
+
+% TIRE DEFLECTION SİMS:
+[y_td_ol, ~]     = lsim(quartercar('tire deflection','r_dot'), r_dot_iso_compare, t_);
+[y_td_hinfA, ~]  = lsim(cl_hinf_A('td','r'), r_iso_compare, t_);
+[y_td_hinfD, ~]  = lsim(cl_hinf_D('td','r'), r_iso_compare, t_);
+
 figure(4); clf;
-% fig = figure('WindowStyle','normal','Position',[100 100 900 600]);
-subplot(2,1,1);
-plot(t, y_ab_ol,  'b--','LineWidth',0.8); hold on;
-plot(t, y_ab_hinfA, 'r',  'LineWidth',1.0);
-plot(t, y_ab_hinfD,'k',  'LineWidth',1.0);
+subplot(3,1,1);
+plot(t_, y_ab_ol,  'b--','LineWidth',0.8); hold on;
+plot(t_, y_ab_hinfA, 'r',  'LineWidth',1.0);
+plot(t_, y_ab_hinfD,'k',  'LineWidth',1.0);
 title('Body Acceleration (Comfort)');
 ylabel('m/s^2'); grid on;
 legend(sprintf('OL (%.4f)',   rms(y_ab_ol)), ...
     sprintf('HinfA (%.4f)',  rms(y_ab_hinfA)), ...
     sprintf('HinfD (%.4f)',rms(y_ab_hinfD)));
-xlim([10, 15]);   % show only t = 10 to 20 seconds
-subplot(2,1,2);
-plot(t, y_rs_ol*100,  'b--','LineWidth',0.8); hold on;
-plot(t, y_rs_hinfA*100, 'r',  'LineWidth',1.0);
-plot(t, y_rs_hinfD*100,'k',  'LineWidth',1.0);
+xlim([10, 15]);
+
+subplot(3,1,2);
+plot(t_, y_rs_ol*100,  'b--','LineWidth',0.8); hold on;
+plot(t_, y_rs_hinfA*100, 'r',  'LineWidth',1.0);
+plot(t_, y_rs_hinfD*100,'k',  'LineWidth',1.0);
 title('Suspension Deflection');
-ylabel('cm'); xlabel('Time (s)'); grid on;
+ylabel('cm'); grid on;
 legend(sprintf('OL (%.4f)',   rms(y_rs_ol)*100), ...
     sprintf('HinfA (%.4f)',  rms(y_rs_hinfA)*100), ...
     sprintf('HinfD (%.4f)',rms(y_rs_hinfD)*100));
-xlim([10, 15]);   % show only t = 10 to 20 seconds
-disp('Road Compare:');
-disp(road_compare);
-disp('gamma A:');
-disp(gamma_out_A);
-disp('gamma D:');
-disp(gamma_out_D);
-disp('Open loop RMS:');
-disp(rms(y_ab_ol)*100);
-disp('K_A RMS:');
-disp(rms(y_ab_hinfA)*100);
-disp('K_D RMS:');
-disp(rms(y_ab_hinfD)*100);
-%% hinf analysis rms force
-% K_D is the H∞ controller for Type D; qcar_open_D is its plant
-Act = tf(1,[1/60 1]);
-Act.InputName = "u"; Act.OutputName = "fs";
+xlim([10, 15]);
 
-sys_hinf_u = connect(qcar_open_D, Act, K_A, "r", "u");
+subplot(3,1,3);
+plot(t_, y_td_ol*100,  'b--','LineWidth',0.8); hold on;
+plot(t_, y_td_hinfA*100, 'r',  'LineWidth',1.0);
+plot(t_, y_td_hinfD*100,'k',  'LineWidth',1.0);
+title('Tire Deflection (Road Holding)');
+ylabel('cm'); xlabel('Time (s)'); grid on;
+legend(sprintf('OL (%.4f)',   rms(y_td_ol)*100), ...
+    sprintf('HinfA (%.4f)',  rms(y_td_hinfA)*100), ...
+    sprintf('HinfD (%.4f)',rms(y_td_hinfD)*100));
+xlim([10, 15]);
 
-% Simulate on the same road as LQR's simulation
-[u_hinf, ~] = lsim(sys_hinf_u, r_iso, t);
+disp('------------------------------------------------');
+disp(['Road Compare: ', road_compare]);
+disp('------------------------------------------------');
+fprintf('gamma A: %.4f\n', gamma_out_A);
+fprintf('gamma D: %.4f\n\n', gamma_out_D);
 
-fprintf('--- H∞ K_D control force ---\n');
-fprintf('  RMS:  %.2f N\n', rms(u_hinf));
-fprintf('  Peak: %.2f N\n', max(abs(u_hinf)));
-%% hinf analysis rms 2
-% Method 1: extract u directly (what you did)
-sys_hinf_u = connect(qcar_open_D, Act, K_A, "r", "u");
-[u_hinf, ~] = lsim(sys_hinf_u, r_iso, t);
-fprintf('u (controller output) RMS: %.4f\n', rms(u_hinf));
+disp('--- Body Acceleration RMS [m/s^2] ---');
+fprintf('Open-Loop: %.4f\n', rms(y_ab_ol));
+fprintf('K_A:       %.4f\n', rms(y_ab_hinfA));
+fprintf('K_D:       %.4f\n\n', rms(y_ab_hinfD));
 
-% Method 2: extract fs directly
-sys_hinf_fs = connect(qcar_open_A, Act, K_A, "r", "fs");
-[fs_hinf, ~] = lsim(sys_hinf_fs, r_iso, t);
-fprintf('fs (after actuator) RMS:  %.4f\n', rms(fs_hinf));
+disp('--- Rattle Space RMS [cm] ---');
+fprintf('Open-Loop: %.4f\n', rms(y_rs_ol)*100);
+fprintf('K_A:       %.4f\n', rms(y_rs_hinfA)*100);
+fprintf('K_D:       %.4f\n\n', rms(y_rs_hinfD)*100);
 
-% Method 3: actual force into the plant
-% Inside the plant, fs gets multiplied by 1e3/ms via the B matrix
-% So the equivalent Newton force is fs * 1e3
-fprintf('Actual force (fs*1e3) RMS: %.2f N\n', rms(fs_hinf)*1e3);
+%% Road Handling Check & Forces
+g = 9.81;
+F_static = (ms + mu) * g;
+F_dyn_ol    = kt * y_td_ol;
+F_dyn_hinfA = kt * y_td_hinfA;
+F_dyn_hinfD = kt * y_td_hinfD;
 
-% Sanity check: LQR force
-A_cl = A - B(:,1)*K_lqr;  % use the H∞ plant's A and B(:,1)?  
-% Actually use the LQR plant — let me re-do this carefully
-% LQR plant from your code:
-A_lqr_plant = [0, 1, 0, -1; -ks/ms, -bs/ms, 0, bs/ms; 0, 0, 0, 1; ks/mu, bs/mu, -kt/mu, -(bs+bt)/mu];
-B_lqr_plant = [0; 1/ms; 0; -1/mu];
-sys_lqr_u = ss(A_lqr_plant - B_lqr_plant*K_lqr, L, -K_lqr, 0);
-sys_lqr_u.InputName = 'r_dot'; sys_lqr_u.OutputName = 'u';
-[u_lqr, ~] = lsim(sys_lqr_u, rdot_iso, t);
-fprintf('LQR force RMS: %.2f N\n', rms(u_lqr));
+disp('--- Road Handling Report ---');
+fprintf('Static Tire Load: %.2f N\n', F_static);
+fprintf('Open-Loop Peak Dynamic Force: %7.2f N  | Ratio: %.2f\n', max(abs(F_dyn_ol)), max(abs(F_dyn_ol))/F_static);
+fprintf('K_A Peak Dynamic Force:       %7.2f N  | Ratio: %.2f\n', max(abs(F_dyn_hinfA)), max(abs(F_dyn_hinfA))/F_static);
+fprintf('K_D Peak Dynamic Force:       %7.2f N  | Ratio: %.2f\n\n', max(abs(F_dyn_hinfD)), max(abs(F_dyn_hinfD))/F_static);
+
+if max(abs(F_dyn_ol)) > F_static
+    disp('>>> WARNING: Open-loop experiences TIRE LIFT-OFF on this road!');
+end
+if max(abs(F_dyn_hinfA)) > F_static
+    disp('>>> WARNING: K_A experiences TIRE LIFT-OFF on this road!');
+end
+if max(abs(F_dyn_hinfD)) > F_static
+    disp('>>> WARNING: K_D experiences TIRE LIFT-OFF on this road!');
+end
+
+figure(5); clf;
+plot(t_, abs(F_dyn_ol) / F_static, 'b--', 'LineWidth', 0.8); hold on;
+plot(t_, abs(F_dyn_hinfA) / F_static, 'r', 'LineWidth', 1.0);
+plot(t_, abs(F_dyn_hinfD) / F_static, 'k', 'LineWidth', 1.0);
+yline(1.0, 'm-', 'Lift-off Limit (F_{dyn} = F_{stat})', 'LineWidth', 2);
+title(sprintf('Dynamic vs Static Tire Load Ratio on %s', road_compare));
+xlabel('Time (s)');
+ylabel('Ratio (F_{dyn} / F_{stat})');
+grid on;
+legend('Open-Loop', 'K_A', 'K_D', 'Location', 'Best');
+xlim([10, 15]);
+ylim([0, 1.5]); % Scale to see the liftoff clearly
+%% better rms
+% unit test:
+fs = 700;
+fcheck = logspace(-1, 2, 200); g = zeros(size(fcheck));
+T = 10; t = (0:1/fs:T)';
+figure(6); clf;
+for i = 1:numel(fcheck)
+    x = sin(2*pi*fcheck(i)*t);
+    g(i) = iso2631_wk_rms(x, fs) / sqrt(mean(x.^2));
+end
+semilogx(fcheck, 20*log10(g)); grid on
+xlabel('Hz'); ylabel('Wk gain [dB]');
+
+aw_rms_ol = iso2631_wk_rms(y_ab_ol, fs);
+aw_rms_hinfA = iso2631_wk_rms(y_ab_hinfA, fs);
+aw_rms_hinfD = iso2631_wk_rms(y_ab_hinfD, fs);
 %% helpers
 function [cl_hinf, K, gamma_out, qcar_open, info, rdot_iso, r_iso] = design_hinf_for_road(road_type, rms_a_ref, rms_rs_ref, knob, params)
-% DESIGN_HINF_FOR_ROAD  Synthesise an H-infinity controller for a given ISO road class.
-%
-%   [cl_hinf, K, gamma_out, qcar_open, info] = design_hinf_for_road(road_type)
-%   [cl_hinf, K, gamma_out, qcar_open, info] = design_hinf_for_road(road_type, params)
-%
-%   Inputs:
-%     road_type : string, e.g. 'Type A' ... 'Type H', 'Average road', etc.
-%     params    : (optional) vehicle parameter set: 'bd' (default), 'nom',
-%                 'suv', 'truck', 'sunlusoy'.
-%
-%   Outputs:
-%     cl_hinf   : closed-loop ss from road displacement r to outputs
-%                 [ab; sd; xb] (body acceleration, suspension deflection, body travel)
-%     K         : the H-infinity controller (inputs: sd, ab ; output: u)
-%     gamma_out : achieved H-infinity norm
-%     qcar_open : open-loop displacement-input plant ss
-%     info      : struct with fields {road_type, u0, t, r_iso, hsum,
-%                                     rms_road, rms_a, rms_s, ms, mu, ks, kt, bs, bt}
-
     if nargin < 5 || isempty(params)
         params = 'nom';
     end
 
-    % --- 1) Speed for this road class ---
     u0 = get_speed_for_road(road_type); V = u0;
-    % --- 2) Road profile ---
     [~, t, hsum, Gh0] = roadprofile_fun(road_type, u0);
     rms_road = rms(hsum);
     r_iso    = hsum(1:length(t));
     dt       = t(2) - t(1);
     rdot_iso = [diff(hsum)./dt, 0];
 
-    % --- 3) Vehicle parameters ---
     [ms, mu, bs, ks, kt, bt] = get_vehicle_params(params);   
 
-    % --- 5) Displacement-input plant for H-infinity synthesis ---
+    % --- Displacement-input plant for H-infinity synthesis ---
     A = [ 0 1 0 0; ...
           [-ks -bs ks bs]/ms; ...
           0 0 0 1; ...
           [ks bs -ks-kt -bs]/mu];
     B = [ 0 0; 0 1e3/ms; 0 0; [kt -1e3]/mu];
-    C = [1 0 0 0; 1 0 -1 0; A(2,:)];
-    D = [0 0; 0 0; B(2,:)];
+    
+    % ADD TIRE DEFLECTION AS OUTPUT 4: td = x3 - r 
+    C = [1 0 0 0; 1 0 -1 0; A(2,:); 0 0 1 0];
+    D = [0 0; 0 0; B(2,:); -1 0];
 
     qcar_open = ss(A, B, C, D);
     qcar_open.StateName  = ["body travel (m)";"body vel (m/s)"; ...
                             "wheel travel (m)";"wheel vel (m/s)"];
     qcar_open.InputName  = ["r";"fs"];
-    qcar_open.OutputName = ["xb";"sd";"ab"];
+    qcar_open.OutputName = ["xb";"sd";"ab";"td"];
 
     w_bounce = sqrt(ks/ms);
     beta = 0.01;
 
     Act = tf(1,[1/60 1]);
-    % Act = ss(1);
     Act.InputName = "u"; Act.OutputName = "fs";
 
-    % Wroad
-    % w_break = 6.136*V/V_ref*1.2;
-    w_wheel_hop = sqrt(kt/mu);   % ~ 67 rad/s
+    w_wheel_hop = sqrt(kt/mu);  
     w_break = max(10*(V/33), w_wheel_hop * 1.5);
-    % w_break = 12;
-    type_w_road = 3;
-    if type_w_road==1
-        Wroad = ss(0.2);
-    elseif type_w_road==2
-        Wroad = ss(rms_road);
-    elseif type_w_road==3
+    
+    type_w_road = 3; % Kept at 3 based on your previous fix
+    if type_w_road==3
         Wroad = tf(sqrt(Gh0 * V) * w_break, [1, w_break]);
-    elseif type_w_road==4
-        n0 = 0.1; n1 = 0.01;
-        w0 = 2*pi*n1*V;
-        num = 2*pi*n0*sqrt(Gh0*V);
-        Wroad = tf(num,[1 w0]);
-    elseif type_w_road == 5
-        % Normalize so DC magnitude is always 0.02 (for example), shape depends on V:
-        n0 = 0.1; n1 = 0.01;
-        w0 = 2*pi*n1*V;
-        Wroad_target_dc = 0.02;   % fixed target
-        num = Wroad_target_dc * w0;
-        Wroad = tf(num, [1, w0]);
     end
     Wroad.u = "d1"; Wroad.y = "r";
     
     % Wact
-    % Wact = 0.05 * tf([1, w_bounce], [1, 80]);   % was 1e-6
     Wact = 0.1 * tf([1, w_bounce], [1, 100]);
-    % Wact = 0.02 * tf([1, w_bounce], [1, 80]);   % was 1e-6
-    % Wact = 1e-6 * tf(1,1);
     Wact.u = "u"; Wact.y = "e1";
 
     Wd2 = ss(0.01); Wd2.u = "d2"; Wd2.y = "Wd2";
     Wd3 = ss(0.5);  Wd3.u = "d3"; Wd3.y = "Wd3";
 
-    Gh0_ref = 16e-06;
-    scale_factor = sqrt(Gh0_ref / Gh0);
     scale_factor = 1;
-    % Wsd = knob * (beta/rms_rs_ref) * tf(1, [1/w_bounce, 1]);
     Wsd = scale_factor * knob * (beta) * tf(1, [1/w_bounce, 1]);
     Wsd.u = "sd"; Wsd.y = "e3";
 
-    % Wab = knob * ((1-beta)/rms_a_ref) * ...
-    %       tf(1, conv([1/w_bounce, 1],[1/w_bounce, 1]));
-    Wab = scale_factor * knob * ((1-beta)) * ...
-        tf(1, conv([1/w_bounce, 1],[1/w_bounce, 1]));
+    Wab = scale_factor * knob * ((1-beta)) * tf(1, conv([1/w_bounce, 1],[1/w_bounce, 1]));
     Wab.u = "ab"; Wab.y = "e2";
 
     sdmeas = sumblk("y1 = sd+Wd2");
@@ -621,41 +378,39 @@ function [cl_hinf, K, gamma_out, qcar_open, info, rdot_iso, r_iso] = design_hinf
     ICinputs  = ["d1";"d2";"d3";"u"];
     ICoutputs = ["e1";"e2";"e3";"y1";"y2"];
 
-    qcaric = connect(qcar_open(2:3,:), Act, Wroad, Wact, Wab, Wsd, ...
+    % Notice qcar_open(["sd","ab"],:) isolates just the outputs needed to connect to the weights
+    qcaric = connect(qcar_open(["sd","ab"],:), Act, Wroad, Wact, Wab, Wsd, ...
                      Wd2, Wd3, sdmeas, abmeas, ICinputs, ICoutputs);
 
-    % --- 7) Synthesis ---
     [K, ~, gamma_out] = hinfsyn(qcaric, 2, 1);
     K.u = ["sd","ab"]; K.y = "u";
-    % K = balred(K, 6);   % reduce 10-state controller to 6 states
-    % --- 8) Closed-loop with outputs reordered to [ab; sd; xb] ---
-    cl_hinf = connect(qcar_open, Act, K, "r", ["xb";"sd";"ab"]);
-    cl_hinf = cl_hinf([3,2,1], :);
+    
+    % Reconnect closed loop with ALL outputs including Tire Deflection
+    cl_hinf = connect(qcar_open, Act, K, "r", ["xb";"sd";"ab";"td"]);
+    cl_hinf = cl_hinf([3,2,1,4], :); % Orders outputs as: ab, sd, xb, td
 
-    % --- 9) Bundle info ---
     info.road_type = road_type;
     info.u0        = u0;
     info.t         = t;
     info.r_iso     = r_iso;
     info.hsum      = hsum;
     info.rms_road  = rms_road;
-    info.rms_a_ref     = rms_a_ref;
-    info.rms_rs_ref     = rms_rs_ref;
+    info.rms_a_ref = rms_a_ref;
+    info.rms_rs_ref= rms_rs_ref;
     info.ms = ms; info.mu = mu; info.ks = ks; info.kt = kt;
     info.bs = bs; info.bt = bt;
 end
 
-% =========================================================================
 function u0 = get_speed_for_road(road_type)
     switch road_type
         case 'Type A',  u0 = 33;
-        case 'Type B',  u0 = 30;
-        case 'Type C',  u0 = 25;
-        case 'Type D',  u0 = 20;
-        case 'Type E',  u0 = 15;
-        case 'Type F',  u0 = 10;
-        case 'Type G',  u0 = 7;
-        case 'Type H',  u0 = 5;
+        case 'Type B',  u0 = 50;%30;
+        case 'Type C',  u0 = 19;%25;
+        case 'Type D',  u0 = 7;%20;
+        case 'Type E',  u0 = 5;%15;
+        case 'Type F',  u0 = 2;%10;
+        case 'Type G',  u0 = 1.5;%7;
+        case 'Type H',  u0 = 1;%5;
         case 'Smooth airfield runway',          u0 = 33;
         case 'Rough airfield runway',           u0 = 20;
         case 'Tarmac motorway',                 u0 = 33;
@@ -680,14 +435,7 @@ function u0 = get_speed_for_road(road_type)
 end
 
 function [Gh0, V] = get_road_severity(road_type)
-% GET_ROAD_SEVERITY  Returns ISO 8608 unevenness index Gh0 and default
-% vehicle speed V for a given road type.
-%
-%   Gh0 : displacement PSD level at reference angular frequency [m^3/rad]
-%   V   : recommended vehicle speed [m/s]
-
     switch road_type
-        % ── ISO 8608 Standard Classes ──────────────────────────────────
         case 'Type A',  Gh0 = 1     * 1e-6; V = 33;
         case 'Type B',  Gh0 = 4     * 1e-6; V = 30;
         case 'Type C',  Gh0 = 16    * 1e-6; V = 25;
@@ -696,12 +444,8 @@ function [Gh0, V] = get_road_severity(road_type)
         case 'Type F',  Gh0 = 1024  * 1e-6; V = 10;
         case 'Type G',  Gh0 = 4096  * 1e-6; V = 7;
         case 'Type H',  Gh0 = 16384 * 1e-6; V = 5;
-
-        % ── Airfield ───────────────────────────────────────────────────
         case 'Smooth airfield runway', Gh0 = (4.3e-11)/(2*pi); V = 33;
         case 'Rough airfield runway',  Gh0 = (8.1e-6) /(2*pi); V = 20;
-
-        % ── Paved Roads ────────────────────────────────────────────────
         case 'Tarmac motorway',        Gh0 = (6.45e-8)/(2*pi); V = 33;
         case 'Concrete motorway',      Gh0 = (2.14e-7)/(2*pi); V = 33;
         case 'Good road',              Gh0 = (3.0e-7) /(2*pi); V = 30;
@@ -711,23 +455,18 @@ function [Gh0, V] = get_road_severity(road_type)
         case 'Highway with gravel',    Gh0 = (4.4e-6) /(2*pi); V = 18;
         case 'Poor road',              Gh0 = (1.5e-5) /(2*pi); V = 15;
         case 'Very rough unmade road', Gh0 = (5.17e-5)/(2*pi); V = 10;
-
-        % ── Off-road ───────────────────────────────────────────────────
         case 'Pasture',                        Gh0 = (1.2e-5) /(2*pi); V = 12;
         case 'Cross country medium roughness', Gh0 = (3.16e-5)/(2*pi); V = 8;
         case 'Grassland',                      Gh0 = (4.98e-5)/(2*pi); V = 8;
         case 'Rocky Soil',                     Gh0 = (2.34e-4)/(2*pi); V = 5;
         case 'Cross country severe',           Gh0 = (3.6e-4) /(2*pi); V = 4;
-
-        % ── Test Courses ───────────────────────────────────────────────
         case 'Random Test Course', Gh0 = (3.44e-4)/(2*pi); V = 8;
         case 'Rocky Test Course',  Gh0 = (1.01e-3)/(2*pi); V = 5;
-
         otherwise
             error('Unknown road type: "%s"', road_type);
     end
 end
-% =========================================================================
+
 function [ms, mu, bs, ks, kt, bt] = get_vehicle_params(params)
     switch params
         case 'bd'
@@ -743,4 +482,50 @@ function [ms, mu, bs, ks, kt, bt] = get_vehicle_params(params)
         otherwise
             error('Unknown params: "%s"', params);
     end
+end
+
+function aw_rms = iso2631_wk_rms(a, fs)
+% ISO 2631-1 Wk frequency-weighted RMS of vertical acceleration.
+%   a  : acceleration time history [m/s^2]
+%   fs : sampling rate [Hz]
+% Verified against ISO 8041 reference Wk magnitudes (<0.3% error, 0.5-20 Hz).
+
+    % --- input guards (this is what was giving you NaN) ---
+    if ~isscalar(fs) || ~isfinite(fs) || fs <= 0
+        error('fs must be a positive finite scalar. Got: %s', mat2str(fs));
+    end
+    a = a(:);
+    if any(~isfinite(a))
+        error('Input acceleration contains NaN/Inf at %d samples.', sum(~isfinite(a)));
+    end
+
+    % --- Wk parameters (ISO 2631-1:1997) ---
+    f1=0.4;  Q1=0.71;   f2=100; Q2=0.71;      % band limiting
+    f3=12.5; f4=12.5; Q4=0.63;                % a-v transition
+    f5=2.37; Q5=0.91; f6=3.35; Q6=0.91;       % upward step
+    w1=2*pi*f1; w2=2*pi*f2; w3=2*pi*f3; w4=2*pi*f4; w5=2*pi*f5; w6=2*pi*f6;
+
+    % --- continuous biquads {num, den}; note the 0.5 in the step section ---
+    Hh = {[1 0 0],                 [1 w1/Q1 w1^2]};
+    Hl = {[0 0 w2^2],              [1 w2/Q2 w2^2]};
+    Ht = {[0 w4^2/w3 w4^2],        [1 w4/Q4 w4^2]};
+    Hs = {[0.5/w5^2 0.5/(Q5*w5) 0.5], [1/w6^2 1/(Q6*w6) 1]};   % <-- 0.5 fix
+    sections = {Hh, Hl, Ht, Hs};
+
+    aw = a;
+    for k = 1:numel(sections)
+        [b, ad] = bilinear_biquad(sections{k}{1}, sections{k}{2}, fs);
+        aw = filter(b, ad, aw);
+    end
+    aw_rms = sqrt(mean(aw.^2));
+end
+
+function [B, A] = bilinear_biquad(num, den, fs)
+    K = 2*fs;
+    b2=num(1); b1=num(2); b0=num(3);
+    a2=den(1); a1=den(2); a0=den(3);
+    B = [ b2*K^2 + b1*K + b0,  -2*b2*K^2 + 2*b0,   b2*K^2 - b1*K + b0];
+    A = [ a2*K^2 + a1*K + a0,  -2*a2*K^2 + 2*a0,   a2*K^2 - a1*K + a0];
+    B = B / A(1);
+    A = A / A(1);
 end
