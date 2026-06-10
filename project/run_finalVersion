@@ -1,0 +1,957 @@
+clear all; clc;
+%% active suspension model used in butsuen
+% for LQR control extended for h-infinity synthesis
+% states:
+%   x1 = zs-zu (rattle space)
+%   x2 = zs_dot (body velocity)
+%   x3 = zu-zr (tire deflection)
+%   x4 = zu_dot (tire velocity)
+% inputs:
+%   u: actuator force
+%   r_dot: road velocity
+% outputs:
+%   y1 = zs_dot_dot (body acceleration)
+%   y2 = zs-zu (=x1) (rattle space)
+%% init.s
+% close all;
+set(groot, 'DefaultFigureWindowStyle', 'docked');
+%% generate road profile
+road_type = 'Type D';
+switch road_type
+    % ── ISO 8608 Standard Classes ──────────────────────────────────
+    case 'Type A',  u0 = 33;
+    case 'Type B',  u0 = 30;
+    case 'Type C',  u0 = 25;
+    case 'Type D',  u0 = 20;
+    case 'Type E',  u0 = 15;
+    case 'Type F',  u0 = 10;
+    case 'Type G',  u0 = 7;
+    case 'Type H',  u0 = 5;
+        % ── Airfield ───────────────────────────────────────────────────
+    case 'Smooth airfield runway', u0 = 33;
+    case 'Rough airfield runway',  u0 = 20;
+        % ── Paved Roads ────────────────────────────────────────────────
+    case 'Tarmac motorway',        u0 = 33;
+    case 'Concrete motorway',      u0 = 33;
+    case 'Good road',              u0 = 30;
+    case 'Smooth highway',         u0 = 30;
+    case 'Average road',           u0 = 25;
+    case 'Minor road',             u0 = 20;
+    case 'Highway with gravel',    u0 = 18;
+    case 'Poor road',              u0 = 15;
+    case 'Very rough unmade road', u0 = 10;
+        % ── Off-road ───────────────────────────────────────────────────
+    case 'Pasture',                        u0 = 12;
+    case 'Cross country medium roughness', u0 = 8;
+    case 'Grassland',                      u0 = 8;
+    case 'Rocky Soil',                     u0 = 5;
+    case 'Cross country severe',           u0 = 4;
+        % ── Test Courses ───────────────────────────────────────────────
+    case 'Random Test Course', u0 = 8;
+    case 'Rocky Test Course',  u0 = 5;
+    otherwise
+        error('Unknown road type: "%s"', road_type);
+end
+[road_sig, t, hsum] = roadprofile_fun(road_type, u0);
+rms_road = rms(hsum);
+r_iso = hsum(1:length(t));          % road displacement [m]
+dt     = t(2) - t(1);
+rdot_raw = [diff(hsum)./dt, 0];
+rdot_iso = rdot_raw;
+
+%% define parameters
+params = 'nom';
+if strcmp(params,'bd')
+    ms = 300; mu = 60; bs = 1000; ks = 16000; kt = 190000; bt = 0;
+elseif strcmp(params,'nom')
+    ms = 240; mu = 36; bs = 1000; ks = 16000; kt = 160000; bt = 0;
+elseif strcmp(params,'suv')
+    ms = 600; mu = 60; bs = 3000; ks = 20000; kt = 180000; bt = 0;
+elseif strcmp(params,'truck')
+    ms = 4000; mu = 200; bs = 8000; ks = 150000; kt = 800000; bt = 0;
+elseif strcmp(params,'sunlusoy')
+    ms = 250; mu = 35; bs = 800; ks = 15000; kt = 120000; bt = 0;
+end
+
+% system dynamics
+A = [0, 1, 0, -1;...
+    -ks/ms, -bs/ms, 0, bs/ms;...
+    0, 0, 0, 1;...
+    ks/mu, bs/mu, -kt/mu, -(bs+bt)/mu];
+B = [0; 1/ms; 0; -1/mu];
+L = [0; 0; -1; 0];
+B_x = [B,L];
+C = [A(2,:); 1, 0, 0, 0; 0, 0, 1, 0];
+D = [1/ms, 0; 0, 0; 0, 0];
+
+quartercar = ss(A, B_x, C, D);
+quartercar.StateName = {'rattle space'; 'body velocity'; 'tire deflection'; 'tire velocity'};
+quartercar.InputName = {'fs','r_dot'};
+quartercar.OutputName = {'body acceleration'; 'rattle space'; 'tire deflection'};
+quartercar_openloop = quartercar(:,'r_dot');
+
+%% time simulation for open-loop
+[y_ol_a,~] = lsim(quartercar('body acceleration','r_dot'), rdot_iso, t);
+[y_ol_s,~] = lsim(quartercar('rattle space','r_dot'),      rdot_iso, t);
+rms_a = rms(y_ol_a);
+rms_s = rms(y_ol_s);
+rms_r = rms(rdot_iso);
+
+%% lqr design
+ro1 = 0.4; ro2 = 0.16; ro3 = 0.4; ro4 = 0.16;
+Q = [ks^2/ms^2+ro1, bs*ks/ms^2,    0,   -bs*ks/ms^2;...
+    bs*ks/ms^2,    bs^2/ms^2+ro2,  0,   -bs^2/ms^2;...
+    0,             0,              ro3, 0;...
+    -bs*ks/ms^2,   -bs^2/ms^2,     0,   bs^2/ms^2+ro4];
+N = [-ks/ms^2; -bs/ms^2; 0; bs/ms^2];
+R = 1/ms^2;
+K_lqr = lqr(A, B, Q, R, N);
+A_cl = A-B*K_lqr;
+C_cl = [A_cl(2,:); 1, 0, 0, 0; 0, 0, 1, 0];
+quartercar_cl_lqr = ss(A-B*K_lqr,L,C_cl,D(:,2));
+quartercar_cl_lqr.StateName = {'rattle space'; 'body velocity'; 'tire deflection'; 'tire velocity'};
+quartercar_cl_lqr.InputName = {'r_dot'};
+quartercar_cl_lqr.OutputName = {'body acceleration'; 'rattle space'; 'tire deflection'};
+
+%% temp lqr analysis
+A_cl = A - B*K_lqr;
+C_u  = -K_lqr;
+D_u  = 0;            
+sys_lqr_u = ss(A_cl, L, C_u, D_u);
+sys_lqr_u.InputName  = 'r_dot';
+sys_lqr_u.OutputName = 'u';
+[u_lqr, ~] = lsim(sys_lqr_u, rdot_iso, t);
+
+fprintf('--- LQR control force ---\n');
+fprintf('  RMS:  %.2f N\n', rms(u_lqr));
+fprintf('  Peak: %.2f N\n', max(abs(u_lqr)));
+
+%% hinf design
+[quartercar_cl_hinf, K, gamma, qcar,...
+    info, rdot_iso, r_iso] = ...
+    design_hinf_for_road('Type A',...
+    1,1,3, 0.01); % synthsize A
+
+%% open-loop vs lqr bode
+figure(1); clf;
+opts = bodeoptions;
+opts.FreqUnits = 'Hz'; opts.MagScale  = 'log';
+opts.MagUnits  = 'abs'; opts.YLim = [10^-6, 10^2];
+bodemag(quartercar_openloop, 'b--', opts); hold on
+bodemag(quartercar_cl_lqr,'r', opts); 
+grid minor
+legend('Open-loop','LQR','location','SouthEast')
+title('Open-loop vs LQR Bode');
+xlim([0.01, 1000])
+
+%% open-loop vs h-infinity bode
+figure(2); clf;
+opts = bodeoptions;
+opts.FreqUnits = 'Hz'; opts.MagScale  = 'log';
+opts.MagUnits  = 'abs'; opts.YLim = [10^-6, 10^3];
+bodemag(qcar(["sd","ab"],"r"), 'b--', opts); hold on
+bodemag(quartercar_cl_hinf(["sd","ab"],"r"), 'k');
+grid minor
+legend('Open-loop','H-infinity','location','SouthEast')
+title('Open-loop vs H-infiinty Bode');
+xlim([0.01, 1000])
+
+%% time simulations
+[y_ab_ol, ~]      = lsim(quartercar('body acceleration','r_dot'), rdot_iso, t);
+[y_ab_lqr, ~]     = lsim(quartercar_cl_lqr('body acceleration','r_dot'), rdot_iso, t);
+[y_ab_hinf, ~]    = lsim(quartercar_cl_hinf('ab','r'), r_iso, t);
+[y_rs_ol, ~]   = lsim(quartercar('rattle space','r_dot'), rdot_iso, t);
+[y_rs_lqr, ~]  = lsim(quartercar_cl_lqr('rattle space','r_dot'), rdot_iso, t);
+[y_rs_hinf, ~] = lsim(quartercar_cl_hinf('sd','r'), r_iso, t);
+
+figure(3); clf;
+subplot(2,1,1);
+plot(t, y_ab_ol,  'b--','LineWidth',0.8); hold on;
+plot(t, y_ab_lqr, 'r',  'LineWidth',1.0);
+plot(t, y_ab_hinf,'k',  'LineWidth',1.0);
+title('Body Acceleration (Comfort)');
+ylabel('m/s^2'); grid on;
+legend(sprintf('OL (%.4f)',   rms(y_ab_ol)), ...
+       sprintf('LQR (%.4f)',  rms(y_ab_lqr)), ...
+       sprintf('H-inf (%.4f)',rms(y_ab_hinf)));
+xlim([10, 15]);
+subplot(2,1,2);
+plot(t, y_rs_ol*100,  'b--','LineWidth',0.8); hold on;
+plot(t, y_rs_lqr*100, 'r',  'LineWidth',1.0);
+plot(t, y_rs_hinf*100,'k',  'LineWidth',1.0);
+title('Suspension Deflection');
+ylabel('cm'); xlabel('Time (s)'); grid on;
+legend(sprintf('OL (%.4f)',   rms(y_rs_ol)*100), ...
+    sprintf('LQR (%.4f)',  rms(y_rs_lqr)*100), ...
+    sprintf('H-inf (%.4f)',rms(y_rs_hinf)*100));
+xlim([10, 15]);
+
+%% further analysis
+[cl_hinf_A, K_A, gamma_out_A, qcar_open_A] = design_hinf_for_road('Type C', 1, 1, 4, 0.25); % synthsize A
+[cl_hinf_D, K_D, gamma_out_D, qcar_open_D] = design_hinf_for_road('Type C', 1, 1, 50, 0.9); % synthsize D
+
+road_compare = 'Type C';
+u0_ = get_speed_for_road(road_compare);
+[~, t_, hsum_, Gh0_] = roadprofile_fun(road_compare, u0_);
+r_iso_compare     = hsum_(1:length(t_));
+dt_               = t_(2) - t_(1);
+r_dot_iso_compare = [diff(hsum_)./dt_, 0];
+
+% time sim.s:
+[y_ab_ol, ~]     = lsim(quartercar('body acceleration','r_dot'), r_dot_iso_compare, t_);
+[y_ab_hinfA, ~]  = lsim(cl_hinf_A('ab','r'), r_iso_compare, t_);
+[y_ab_hinfD, ~]  = lsim(cl_hinf_D('ab','r'), r_iso_compare, t_);
+
+[y_rs_ol, ~]     = lsim(quartercar('rattle space','r_dot'), r_dot_iso_compare, t_);
+[y_rs_hinfA, ~]  = lsim(cl_hinf_A('sd','r'), r_iso_compare, t_);
+[y_rs_hinfD, ~]  = lsim(cl_hinf_D('sd','r'), r_iso_compare, t_);
+
+% TIRE DEFLECTION SİMS:
+[y_td_ol, ~]     = lsim(quartercar('tire deflection','r_dot'), r_dot_iso_compare, t_);
+[y_td_hinfA, ~]  = lsim(cl_hinf_A('td','r'), r_iso_compare, t_);
+[y_td_hinfD, ~]  = lsim(cl_hinf_D('td','r'), r_iso_compare, t_);
+
+figure(4); clf;
+subplot(3,1,1);
+plot(t_, y_ab_ol,  'b--','LineWidth',0.8); hold on;
+plot(t_, y_ab_hinfA, 'r',  'LineWidth',1.0);
+plot(t_, y_ab_hinfD,'k',  'LineWidth',1.0);
+title('Body Acceleration (Comfort)');
+ylabel('m/s^2'); grid on;
+legend(sprintf('OL (%.4f)',   rms(y_ab_ol)), ...
+    sprintf('HinfA (%.4f)',  rms(y_ab_hinfA)), ...
+    sprintf('HinfD (%.4f)',rms(y_ab_hinfD)));
+xlim([10, 15]);
+
+subplot(3,1,2);
+plot(t_, y_td_ol*100,  'b--','LineWidth',0.8); hold on;
+plot(t_, y_td_hinfA*100, 'r',  'LineWidth',1.0);
+plot(t_, y_td_hinfD*100,'k',  'LineWidth',1.0);
+title('Tire Deflection (Road Holding)');
+ylabel('cm'); xlabel('Time (s)'); grid on;
+legend(sprintf('OL (%.4f)',   rms(y_td_ol)*100), ...
+    sprintf('HinfA (%.4f)',  rms(y_td_hinfA)*100), ...
+    sprintf('HinfD (%.4f)',rms(y_td_hinfD)*100));
+xlim([10, 15]);
+
+subplot(3,1,3);
+plot(t_, y_rs_ol*100,  'b--','LineWidth',0.8); hold on;
+plot(t_, y_rs_hinfA*100, 'r',  'LineWidth',1.0);
+plot(t_, y_rs_hinfD*100,'k',  'LineWidth',1.0);
+title('Suspension Deflection');
+ylabel('cm'); grid on;
+legend(sprintf('OL (%.4f)',   rms(y_rs_ol)*100), ...
+    sprintf('HinfA (%.4f)',  rms(y_rs_hinfA)*100), ...
+    sprintf('HinfD (%.4f)',rms(y_rs_hinfD)*100));
+xlim([10, 15]);
+
+disp('------------------------------------------------');
+disp(['Road Compare: ', road_compare]);
+disp('------------------------------------------------');
+fprintf('gamma A: %.4f\n', gamma_out_A);
+fprintf('gamma D: %.4f\n\n', gamma_out_D);
+
+disp('--- Body Acceleration RMS [m/s^2] ---');
+fprintf('Open-Loop: %.4f\n', rms(y_ab_ol));
+fprintf('K_A:       %.4f\n', rms(y_ab_hinfA));
+fprintf('K_D:       %.4f\n\n', rms(y_ab_hinfD));
+
+disp('--- Rattle Space RMS [cm] ---');
+fprintf('Open-Loop: %.4f\n', rms(y_rs_ol)*100);
+fprintf('K_A:       %.4f\n', rms(y_rs_hinfA)*100);
+fprintf('K_D:       %.4f\n\n', rms(y_rs_hinfD)*100);
+
+%% Road Handling Check & Forces
+g = 9.81;
+F_static = (ms + mu) * g;
+F_dyn_ol    = kt * y_td_ol;
+F_dyn_hinfA = kt * y_td_hinfA;
+F_dyn_hinfD = kt * y_td_hinfD;
+
+disp('--- Road Handling Report ---');
+fprintf('Static Tire Load: %.2f N\n', F_static);
+fprintf('Open-Loop Peak Dynamic Force: %7.2f N  | Ratio: %.2f\n', max(abs(F_dyn_ol)), max(abs(F_dyn_ol))/F_static);
+fprintf('K_A Peak Dynamic Force:       %7.2f N  | Ratio: %.2f\n', max(abs(F_dyn_hinfA)), max(abs(F_dyn_hinfA))/F_static);
+fprintf('K_D Peak Dynamic Force:       %7.2f N  | Ratio: %.2f\n\n', max(abs(F_dyn_hinfD)), max(abs(F_dyn_hinfD))/F_static);
+
+if max(abs(F_dyn_ol)) > F_static
+    disp('>>> WARNING: Open-loop experiences TIRE LIFT-OFF on this road!');
+end
+if max(abs(F_dyn_hinfA)) > F_static
+    disp('>>> WARNING: K_A experiences TIRE LIFT-OFF on this road!');
+end
+if max(abs(F_dyn_hinfD)) > F_static
+    disp('>>> WARNING: K_D experiences TIRE LIFT-OFF on this road!');
+end
+
+figure(5); clf;
+plot(t_, abs(F_dyn_ol) / F_static, 'b--', 'LineWidth', 0.8); hold on;
+plot(t_, abs(F_dyn_hinfA) / F_static, 'r', 'LineWidth', 1.0);
+plot(t_, abs(F_dyn_hinfD) / F_static, 'k', 'LineWidth', 1.0);
+yline(1.0, 'm-', 'Lift-off Limit (F_{dyn} = F_{stat})', 'LineWidth', 2);
+title(sprintf('Dynamic vs Static Tire Load Ratio on %s', road_compare));
+xlabel('Time (s)');
+ylabel('Ratio (F_{dyn} / F_{stat})');
+grid on;
+legend('Open-Loop', 'K_A', 'K_D', 'Location', 'Best');
+xlim([10, 15]);
+ylim([0, 1.5]); % Scale to see the liftoff clearly
+%% better rms
+% % unit test:
+fs = 700;
+% fcheck = logspace(-1, 2, 200); g = zeros(size(fcheck));
+% T = 10; t = (0:1/fs:T)';
+% figure(6); clf;
+% for i = 1:numel(fcheck)
+%     x = sin(2*pi*fcheck(i)*t);
+%     g(i) = iso2631_wk_rms(x, fs) / sqrt(mean(x.^2));
+% end
+% semilogx(fcheck, 20*log10(g)); grid on
+% xlabel('Hz'); ylabel('Wk gain [dB]');
+
+aw_rms_OL = iso2631_wk_rms(y_ab_ol, fs);
+aw_rms_hinfA = iso2631_wk_rms(y_ab_hinfA, fs);
+aw_rms_hinfD = iso2631_wk_rms(y_ab_hinfD, fs);
+
+%% yco lpv+hinf
+% controller designs
+% Setup the Target Gamma and Bisection Parameters
+road_baseline = 'Type C';
+
+N_grid = 5;
+beta_grid = linspace(0.05, 0.95, N_grid);
+
+target_gamma = 0.95;   
+gamma_tol    = 0.05;   
+max_iters    = 30;     
+
+
+optimal_knobs = zeros(1, N_grid);
+gammas = zeros(1, N_grid);
+% Define execution sampling time (200 Hz digital ECU standard)
+Ts = 1/700; 
+
+for i = 1:N_grid
+    beta_current = beta_grid(i);
+    fprintf('Tuning Controller %d/%d for beta = %.2f...\n', i, N_grid, beta_current);
+    
+    knob_low = 0.01; knob_high = 20.0;
+    best_K_c = []; best_knob = 1;
+    
+    for iter = 1:max_iters
+        knob_test = (knob_low + knob_high) / 2;
+        [cl_hinf, K_test, gamma_test] = design_hinf_for_road(road_baseline, 1, 1, knob_test, beta_current);
+        
+        if isempty(gamma_test) || isnan(gamma_test) || isinf(gamma_test)
+            knob_high = knob_test; continue;
+        end
+        
+        best_K_c = K_test; best_knob = knob_test;
+        
+        if abs(gamma_test - target_gamma) <= gamma_tol
+            break;
+        end
+        if gamma_test > target_gamma
+            knob_high = knob_test;
+        else
+            knob_low = knob_test;
+        end
+    end
+    optimal_knobs(i) = best_knob;
+    gammas(i) = gamma_test;
+    cl_hinf_(:,:,i)= cl_hinf;
+end
+% gh0 to beta mapping
+road_test = 'Type C';
+u0 = get_speed_for_road(road_test);
+[~, t, hsum, Gh0_test] = roadprofile_fun(road_test, u0);
+u0 = get_speed_for_road('Type A');
+[~, ~, ~, Gh0_min] = roadprofile_fun('Type A', u0);
+u0 = get_speed_for_road('Type H');
+[~, ~, ~, Gh0_max] = roadprofile_fun('Type H', u0);
+beta_mapped = 0.05 + 0.90 * (log10(Gh0_test) - log10(Gh0_min)) / (log10(Gh0_max) - log10(Gh0_min));
+% blend controller
+% find nearest two
+% blend them
+idx_min = 1; idx_max = numel(beta_grid);
+i = 1;
+while beta_mapped>beta_grid(i)
+    idx_min = i;
+    i = i + 1;
+    idx_max = i;
+end
+while beta_mapped>beta_grid(i)
+    idx_max = i;
+    i = i + 1;
+end
+disp('Analog beta:');
+disp(beta_mapped);
+disp('Lower beta:');
+disp(beta_grid(idx_min));
+disp('Higher beta:');
+disp(beta_grid(idx_max));
+mul1 = (beta_grid(idx_max)-beta_mapped)/(beta_grid(idx_max)-beta_grid(idx_min));
+mul2 = (-beta_grid(idx_min)+beta_mapped)/(beta_grid(idx_max)-beta_grid(idx_min));
+cl_hinf_lower = cl_hinf_(:,:,idx_min); cl_hinf_higher = cl_hinf_(:,:,idx_max);
+cl_hinf_lpv = mul2*cl_hinf_lower + mul2*cl_hinf_higher;
+
+road_compare = 'Type C';
+u0_ = get_speed_for_road(road_compare);
+[~, t_, hsum_, Gh0_] = roadprofile_fun(road_compare, u0_);
+r_iso_compare     = hsum_(1:length(t_));
+dt_               = t_(2) - t_(1);
+r_dot_iso_compare = [diff(hsum_)./dt_, 0];
+
+% time sim.s:
+[y_ab_ol, ~]     = lsim(quartercar('body acceleration','r_dot'), r_dot_iso_compare, t_);
+[y_ab_hinf_lower, ~]  = lsim(cl_hinf_lower('ab','r'), r_iso_compare, t_);
+[y_ab_hinf_higher, ~]  = lsim(cl_hinf_higher('ab','r'), r_iso_compare, t_);
+[y_ab_hinf_lpv, ~]  = lsim(cl_hinf_lpv('ab','r'), r_iso_compare, t_);
+
+[y_rs_ol, ~]     = lsim(quartercar('rattle space','r_dot'), r_dot_iso_compare, t_);
+[y_rs_hinf_lower, ~]  = lsim(cl_hinf_lower('sd','r'), r_iso_compare, t_);
+[y_rs_hinf_higher, ~]  = lsim(cl_hinf_higher('sd','r'), r_iso_compare, t_);
+[y_rs_hinf_lpv, ~]  = lsim(cl_hinf_lpv('sd','r'), r_iso_compare, t_);
+
+% TIRE DEFLECTION SİMS:
+[y_td_ol, ~]     = lsim(quartercar('tire deflection','r_dot'), r_dot_iso_compare, t_);
+[y_td_hinf_lower, ~]  = lsim(cl_hinf_lower('td','r'), r_iso_compare, t_);
+[y_td_hinf_higher, ~]  = lsim(cl_hinf_higher('td','r'), r_iso_compare, t_);
+[y_td_hinf_lpv, ~]  = lsim(cl_hinf_lpv('td','r'), r_iso_compare, t_);
+
+figure(11); clf;
+subplot(3,1,1);
+plot(t_, y_ab_ol,  'b--','LineWidth',0.8); hold on;
+plot(t_, y_ab_hinf_lower, 'r',  'LineWidth',1.0);
+plot(t_, y_ab_hinf_higher, 'g',  'LineWidth',1.0);
+plot(t_, y_ab_hinf_lpv,'k',  'LineWidth',1.0);
+title('Body Acceleration (Comfort)');
+ylabel('m/s^2'); grid on;
+legend(sprintf('OL (%.4f)',   rms(y_ab_ol)), ...
+    sprintf('Hinf_lower (%.4f)',  rms(y_ab_hinf_lower)),...
+    sprintf('Hinf_higher (%.4f)',rms(y_ab_hinf_higher)),...
+    sprintf('Hinf_lpv (%.4f)',rms(y_ab_hinf_lpv)));
+xlim([10, 15]);
+
+subplot(3,1,2);
+plot(t_, y_td_ol*100,  'b--','LineWidth',0.8); hold on;
+plot(t_, y_td_hinf_lower*100, 'r',  'LineWidth',1.0);
+plot(t_, y_td_hinf_higher*100, 'g',  'LineWidth',1.0);
+plot(t_, y_td_hinf_lpv*100,'k',  'LineWidth',1.0);
+title('Tire Deflection (Road Holding)');
+ylabel('cm'); xlabel('Time (s)'); grid on;
+legend(sprintf('OL (%.4f)',   rms(y_td_ol)*100), ...
+    sprintf('Hinf_lower (%.4f)',  rms(y_td_hinf_lower)*100), ...
+    sprintf('Hinf_higher (%.4f)',  rms(y_td_hinf_higher)*100), ...    
+    sprintf('Hinf_lpv (%.4f)',rms(y_td_hinf_lpv)*100));
+xlim([10, 15]);
+
+subplot(3,1,3);
+plot(t_, y_rs_ol*100,  'b--','LineWidth',0.8); hold on;
+plot(t_, y_rs_hinf_lower*100, 'r',  'LineWidth',1.0);
+plot(t_, y_rs_hinf_higher*100, 'g',  'LineWidth',1.0);
+plot(t_, y_rs_hinf_lpv*100,'k',  'LineWidth',1.0);
+title('Suspension Deflection');
+ylabel('cm'); grid on;
+legend(sprintf('OL (%.4f)',   rms(y_rs_ol)*100), ...
+    sprintf('Hinf_lower (%.4f)',  rms(y_rs_hinf_lower)*100), ...
+    sprintf('Hinf_higher (%.4f)',  rms(y_rs_hinf_higher)*100), ...
+    sprintf('Hinf_lpv (%.4f)',rms(y_rs_hinf_lpv)*100));
+xlim([10, 15]);
+
+disp('------------------------------------------------');
+disp(['Road Compare: ', road_compare]);
+disp('------------------------------------------------');
+% fprintf('gamma A: %.4f\n', gamma_out_A);
+% fprintf('gamma D: %.4f\n\n', gamma_out_D);
+
+disp('--- Body Acceleration RMS [m/s^2] ---');
+fprintf('Open-Loop: %.4f\n', rms(y_ab_ol));
+fprintf('K_lower:       %.4f\n',   rms(y_ab_hinf_lower));
+fprintf('K_higher:      %.4f\n',   rms(y_ab_hinf_higher));
+fprintf('K_lpv:         %.4f\n\n', rms(y_ab_hinf_lpv));
+
+disp('--- Tire Deflection RMS [cm] ---');
+fprintf('Open-Loop: %.4f\n', rms(y_td_ol)*100);
+fprintf('K_lower:       %.4f\n', rms(y_td_hinf_lower)*100);
+fprintf('K_higher:       %.4f\n', rms(y_td_hinf_higher)*100);
+fprintf('K_lpv:       %.4f\n\n', rms(y_td_hinf_lpv)*100);
+
+disp('--- Rattle Space RMS [cm] ---');
+fprintf('Open-Loop: %.4f\n', rms(y_rs_ol)*100);
+fprintf('K_lower:       %.4f\n', rms(y_rs_hinf_lower)*100);
+fprintf('K_higher:       %.4f\n', rms(y_rs_hinf_higher)*100);
+fprintf('K_lpv:       %.4f\n\n', rms(y_rs_hinf_lpv)*100);
+%% AUTOMATED LPV SYNTHESIS & STABLE CANONICAL BLENDING
+disp('--- Starting Automated Gamma-Targeting Synthesis ---');
+
+% 1. Define the Scheduling Parameter Grid
+N_grid = 5; 
+beta_grid = linspace(0.05, 0.95, N_grid);
+
+% 2. Setup the Target Gamma and Bisection Parameters
+target_gamma = 0.95;   
+gamma_tol    = 0.05;   
+max_iters    = 15;     
+
+% Pre-allocate storage for our controller matrices
+Ak = cell(1, N_grid); Bk = cell(1, N_grid);
+Ck = cell(1, N_grid); Dk = cell(1, N_grid);
+optimal_knobs = zeros(1, N_grid);
+
+% Define execution sampling time (200 Hz digital ECU standard)
+Ts = 0.005; 
+
+for i = 1:N_grid
+    beta_current = beta_grid(i);
+    fprintf('Tuning Controller %d/%d for beta = %.2f...\n', i, N_grid, beta_current);
+    
+    knob_low = 0.01; knob_high = 20.0;
+    best_K_c = []; best_knob = 1;
+    
+    for iter = 1:max_iters
+        knob_test = (knob_low + knob_high) / 2;
+        [~, K_test, gamma_test] = design_hinf_for_road('Type C', 1, 1, knob_test, beta_current);
+        
+        if isempty(gamma_test) || isnan(gamma_test) || isinf(gamma_test)
+            knob_high = knob_test; continue;
+        end
+        
+        best_K_c = K_test; best_knob = knob_test;
+        
+        if abs(gamma_test - target_gamma) <= gamma_tol
+            break;
+        end
+        if gamma_test > target_gamma
+            knob_high = knob_test;
+        else
+            knob_low = knob_test;
+        end
+    end
+    optimal_knobs(i) = best_knob;
+    
+    % Clean up numerical tracking states
+    K_clean = minreal(best_K_c);
+    
+    % CRITICAL FIX 1: Force all controllers into a Modal Canonical Form.
+    % This aligns their internal state bases so they can be blended safely!
+    [Am, Bm, Cm, Dm] = ssdata(K_clean);
+    K_modal = canon(ss(Am, Bm, Cm, Dm), 'modal');
+    
+    % Discretize cleanly using Zero-Order Hold
+    K_d = c2d(K_modal, Ts, 'zoh');
+    [Ak{i}, Bk{i}, Ck{i}, Dk{i}] = ssdata(K_d);
+end
+disp('All controllers tuned and canonical-aligned!');
+
+%% PART 1: PURE BASELINE TEST (No road blend, using bulletproof lsim)
+disp('--- Part 1: Simulating Frozen Comfort Controller on Type C ---');
+
+% Extract the closed-loop system for beta = 0.05 (Comfort baseline)
+[cl_baseline, ~, ~, ~] = design_hinf_for_road('Type C', 1, 1, optimal_knobs(1), 0.05);
+
+% Generate continuous Type C road profile
+u0_c = get_speed_for_road('Type C');
+[~, t_c, hsum_c] = roadprofile_fun('Type C', u0_c);
+T_end = min(10, max(t_c));
+t_sim = (0:Ts:T_end)';
+r_dist_c = interp1(t_c, hsum_c, t_sim, 'spline', 0);
+
+% Run baseline LTI simulation via native lsim
+[y_baseline, ~] = lsim(cl_baseline({'ab','sd','td'}, 'r'), r_dist_c, t_sim);
+
+figure(9); clf;
+subplot(3,1,1); plot(t_sim, y_baseline(:,1), 'r'); title('Baseline Comfort: Body Acceleration'); ylabel('m/s^2'); grid on;
+subplot(3,1,2); plot(t_sim, y_baseline(:,2)*100, 'g'); title('Baseline Comfort: Suspension Deflection'); ylabel('cm'); grid on;
+subplot(3,1,3); plot(t_sim, y_baseline(:,3)*100, 'b'); title('Baseline Comfort: Tire Deflection'); ylabel('cm'); xlabel('Time (s)'); grid on;
+
+%% PART 2: IMPLEMENTING ROAD ROUGHNESS MAPPING & SMOOTH LPV BLENDING
+disp('--- Part 2: Running Matrix-Blended LPV Simulation ---');
+
+% Define the physical road profile containing varying roughness segments
+% For a real test, let's look at Type D (Rough road)
+road_compare = 'Type D'; 
+u0_lpv = get_speed_for_road(road_compare);
+[~, t_road, hsum_road, Gh0_nominal] = roadprofile_fun(road_compare, u0_lpv);
+r_dist = interp1(t_road, hsum_road, t_sim, 'spline', 0);
+N_t = length(t_sim);
+
+% Calculate the raw derivative of the road profile to estimate live roughness
+dt = Ts;
+rdot_dist = [diff(r_dist)/dt; 0];
+
+% Setup Logarithmic Mapping bounds (ISO Class A to Class F bounds)
+Gh0_min = 1e-6;   % Class A lower bound
+Gh0_max = 1024e-6; % Class F upper bound
+
+beta_traj = zeros(N_t, 1);
+window_size = 100; % 0.5 second smoothing window
+rdot_buffer = zeros(window_size, 1);
+
+% Extract separate discrete plant matrices to secure tracking loop index mapping
+% inputs: [r_dot; fs], outputs: [ab; sd; td]
+[ms_p, mu_p, bs_p, ks_p, kt_p, bt_p] = get_vehicle_params('nom');
+Ap_c = [0, 1, 0, -1; -ks_p/ms_p, -bs_p/ms_p, 0, bs_p/ms_p; 0, 0, 0, 1; ks_p/mu_p, bs_p/mu_p, -kt_p/mu_p, -(bs_p+bt_p)/mu_p];
+Bp_c = [0, 0; 0, 1/ms_p; -1, 0; 0, -1/mu_p]; % Input 1: r_dot, Input 2: fs
+Cp_c = [Ap_c(2,:); 1, 0, 0, 0; 0, 0, 1, 0];
+Dp_c = [0, 1/ms_p; 0, 0; 0, 0];
+
+Plant_Discrete = c2d(ss(Ap_c, Bp_c, Cp_c, Dp_c), Ts, 'zoh');
+[Ap, Bp, Cp, Dp] = ssdata(Plant_Discrete);
+
+% Initialize unified simulation states
+xp = zeros(4, 1);               % 4 physical vehicle states
+xk = zeros(size(Ak{1}, 1), 1);  % 1 unified controller state vector (Guarantees smooth transfer!)
+y_lpv = zeros(N_t, 3);          % Output array
+
+for k = 1:N_t
+    % --- Step A: Live Road Roughness Parameter Extraction & Mapping ---
+    rdot_buffer = [rdot_buffer(2:end); rdot_dist(k)];
+    if k > window_size
+        % Estimate the live power spectral density parameter from velocity variance
+        estimated_Gh0 = (var(rdot_buffer) * Ts) / (2 * pi * u0_lpv);
+        estimated_Gh0 = max(Gh0_min, min(Gh0_max, estimated_Gh0));
+        
+        % Logarithmic mapping of road parameters directly onto beta
+        raw_beta = 0.05 + 0.90 * (log10(estimated_Gh0) - log10(Gh0_min)) / (log10(Gh0_max) - log10(Gh0_min));
+        beta_traj(k) = max(0.05, min(0.95, raw_beta));
+    else
+        beta_traj(k) = 0.50; % Default to balanced configuration during buffer warmup
+    end
+    
+    % --- Step B: Calculate Interpolation Weights ---
+    weights = zeros(1, N_grid);
+    for i = 1:N_grid
+        dist = abs(beta_grid(i) - beta_traj(k)) / (beta_grid(2) - beta_grid(1));
+        weights(i) = max(0, 1 - dist);
+    end
+    weights = weights / sum(weights);
+    
+    % --- Step C: Interp Controller Matrices (Guarantees perfect state continuity) ---
+    Ak_b = zeros(size(Ak{1})); Bk_b = zeros(size(Bk{1}));
+    Ck_b = zeros(size(Ck{1})); Dk_b = zeros(size(Dk{1}));
+    for i = 1:N_grid
+        if weights(i) > 0
+            Ak_b = Ak_b + weights(i) * Ak{i};
+            Bk_b = Bk_b + weights(i) * Bk{i};
+            Ck_b = Ck_b + weights(i) * Ck{i};
+            Dk_b = Dk_b + weights(i) * Dk{i};
+        end
+    end
+    
+    % --- Step D: Measure Sensors & Extract Control Effort ---
+    % Inputs expected by H-infinity controller: [sd; ab]
+    y_plant = Cp * xp + Dp(:, 1) * rdot_dist(k); 
+    y_meas = [y_plant(2); y_plant(1)]; % Read [sd; ab] safely
+    
+    % Track current state values
+    y_lpv(k, :) = y_plant';
+    
+    % Compute control force using the unified continuous state vector
+    u_force = Ck_b * xk + Dk_b * y_meas;
+    
+    % --- Step E: Propagate state space arrays to k+1 ---
+    xk = Ak_b * xk + Bk_b * y_meas;
+    xp = Ap * xp + Bp * [rdot_dist(k); u_force];
+end
+disp('Simulation executed cleanly with 100% numerical stability!');
+
+% 8. Plotting the Adaptive LPV Dashboard
+figure(10); clf;
+subplot(4,1,1);
+plot(t_sim, beta_traj, 'k', 'LineWidth', 2);
+title('Live Parameter Mapping: \beta (Dynamically updated via Logarithmic Road Roughness)');
+ylabel('\beta'); grid on; ylim([0 1]);
+
+subplot(4,1,2);
+plot(t_sim, y_lpv(:,1), 'b'); 
+title('LPV Active Suspension: Body Acceleration');
+ylabel('m/s^2'); grid on;
+
+subplot(4,1,3);
+plot(t_sim, y_lpv(:,3)*100, 'g'); 
+title('LPV Active Suspension: Tire Deflection');
+ylabel('cm'); grid on;
+
+subplot(4,1,4);
+plot(t_sim, r_dist*100, 'Color', [0.5 0.5 0.5]);
+title(sprintf('Continuous Road Profile Input Profile (%s)', road_compare));
+ylabel('cm'); xlabel('Time (s)'); grid on;
+%% helpers
+function [cl_hinf, K, gamma_out, qcar_open, info, rdot_iso, r_iso] = design_hinf_for_road(road_type, rms_a_ref, rms_rs_ref, knob, beta, params)
+    if nargin < 6 || isempty(params)
+        params = 'nom';
+    end
+
+    u0 = get_speed_for_road(road_type); V = u0;
+    [~, t, hsum, Gh0] = roadprofile_fun(road_type, u0);
+    rms_road = rms(hsum);
+    r_iso    = hsum(1:length(t));
+    dt       = t(2) - t(1);
+    rdot_iso = [diff(hsum)./dt, 0];
+
+    [ms, mu, bs, ks, kt, bt] = get_vehicle_params(params);   
+
+    % --- Displacement-input plant for H-infinity synthesis ---
+    A = [ 0 1 0 0; ...
+          [-ks -bs ks bs]/ms; ...
+          0 0 0 1; ...
+          [ks bs -ks-kt -bs]/mu];
+    B = [ 0 0; 0 1e3/ms; 0 0; [kt -1e3]/mu];
+    
+    % ADD TIRE DEFLECTION AS OUTPUT 4: td = x3 - r 
+    C = [1 0 0 0; 1 0 -1 0; A(2,:); 0 0 1 0];
+    D = [0 0; 0 0; B(2,:); -1 0];
+
+    qcar_open = ss(A, B, C, D);
+    qcar_open.StateName  = ["body travel (m)";"body vel (m/s)"; ...
+                            "wheel travel (m)";"wheel vel (m/s)"];
+    qcar_open.InputName  = ["r";"fs"];
+    qcar_open.OutputName = ["xb";"sd";"ab";"td"];
+
+    w_bounce = sqrt(ks/ms);
+
+    Act = tf(1,[1/60 1]);
+    Act.InputName = "u"; Act.OutputName = "fs";
+
+    w_wheel_hop = sqrt(kt/mu);  
+    w_break = max(10*(V/33), w_wheel_hop * 1.5);
+    
+    type_w_road = 3; % Kept at 3 based on your previous fix
+    if type_w_road==3
+        Wroad = tf(sqrt(Gh0 * V) * w_break, [1, w_break]);
+    end
+    Wroad.u = "d1"; Wroad.y = "r";
+    
+    % Wact
+    Wact = 0.1 * tf([1, w_bounce], [1, 100]);
+    Wact.u = "u"; Wact.y = "e1";
+
+    Wd2 = ss(0.01); Wd2.u = "d2"; Wd2.y = "Wd2";
+    % Wd3 = ss(0.5);  Wd3.u = "d3"; Wd3.y = "Wd3";
+    Wd3 = ss(0.01);  Wd3.u = "d3"; Wd3.y = "Wd3";
+
+    scale_factor = 1;
+    % Wsd = scale_factor * knob * (beta) * tf(1, [1/w_bounce, 1]);
+    Wsd = scale_factor * knob * tf(1, [1/w_bounce, 1]);
+    Wsd.u = "sd"; Wsd.y = "e3";
+
+    Wab = scale_factor * knob * ((1-beta)) * tf(1, conv([1/w_bounce, 1],[1/w_bounce, 1]));
+    Wab.u = "ab"; Wab.y = "e2";
+
+    % Handling is evaluated at the wheel-hop frequency
+    Wtd = knob * beta * tf(1, [1/w_wheel_hop, 1]);
+    Wtd.u = "td"; Wtd.y = "e4";
+
+    sdmeas = sumblk("y1 = sd+Wd2");
+    abmeas = sumblk("y2 = ab+Wd3");
+    ICinputs  = ["d1";"d2";"d3";"u"];
+    ICoutputs = ["e1";"e2";"e3";"e4";"y1";"y2"];
+
+    % Notice qcar_open(["sd","ab"],:) isolates just the outputs needed to connect to the weights
+    qcaric = connect(qcar_open(["sd","ab","td"],:), Act, Wroad, Wact, Wab, Wsd, Wtd, ...
+                     Wd2, Wd3, sdmeas, abmeas, ICinputs, ICoutputs);
+
+    [K, ~, gamma_out] = hinfsyn(qcaric, 2, 1);
+    K.u = ["sd","ab"]; K.y = "u";
+    
+    % Reconnect closed loop with ALL outputs including Tire Deflection
+    cl_hinf = connect(qcar_open, Act, K, "r", ["xb";"sd";"ab";"td"]);
+    cl_hinf = cl_hinf([3,2,1,4], :); % Orders outputs as: ab, sd, xb, td
+
+    info.road_type = road_type;
+    info.u0        = u0;
+    info.t         = t;
+    info.r_iso     = r_iso;
+    info.hsum      = hsum;
+    info.rms_road  = rms_road;
+    info.rms_a_ref = rms_a_ref;
+    info.rms_rs_ref= rms_rs_ref;
+    info.ms = ms; info.mu = mu; info.ks = ks; info.kt = kt;
+    info.bs = bs; info.bt = bt;
+end
+
+function u0 = get_speed_for_road(road_type)
+    switch road_type
+        case 'Type A',  u0 = 33;
+        case 'Type B',  u0 = 50;%30;
+        case 'Type C',  u0 = 19;%25;
+        case 'Type D',  u0 = 7;%20;
+        case 'Type E',  u0 = 5;%15;
+        case 'Type F',  u0 = 2;%10;
+        case 'Type G',  u0 = 1.5;%7;
+        case 'Type H',  u0 = 1;%5;
+        case 'Smooth airfield runway',          u0 = 33;
+        case 'Rough airfield runway',           u0 = 20;
+        case 'Tarmac motorway',                 u0 = 33;
+        case 'Concrete motorway',               u0 = 33;
+        case 'Good road',                       u0 = 30;
+        case 'Smooth highway',                  u0 = 30;
+        case 'Average road',                    u0 = 25;
+        case 'Minor road',                      u0 = 20;
+        case 'Highway with gravel',             u0 = 18;
+        case 'Poor road',                       u0 = 15;
+        case 'Very rough unmade road',          u0 = 10;
+        case 'Pasture',                         u0 = 12;
+        case 'Cross country medium roughness',  u0 = 8;
+        case 'Grassland',                       u0 = 8;
+        case 'Rocky Soil',                      u0 = 5;
+        case 'Cross country severe',            u0 = 4;
+        case 'Random Test Course',              u0 = 8;
+        case 'Rocky Test Course',               u0 = 5;
+        otherwise
+            error('Unknown road type: "%s"', road_type);
+    end
+end
+
+function [Gh0, V] = get_road_severity(road_type)
+    switch road_type
+        case 'Type A',  Gh0 = 1     * 1e-6; V = 33;
+        case 'Type B',  Gh0 = 4     * 1e-6; V = 30;
+        case 'Type C',  Gh0 = 16    * 1e-6; V = 25;
+        case 'Type D',  Gh0 = 64    * 1e-6; V = 20;
+        case 'Type E',  Gh0 = 256   * 1e-6; V = 15;
+        case 'Type F',  Gh0 = 1024  * 1e-6; V = 10;
+        case 'Type G',  Gh0 = 4096  * 1e-6; V = 7;
+        case 'Type H',  Gh0 = 16384 * 1e-6; V = 5;
+        case 'Smooth airfield runway', Gh0 = (4.3e-11)/(2*pi); V = 33;
+        case 'Rough airfield runway',  Gh0 = (8.1e-6) /(2*pi); V = 20;
+        case 'Tarmac motorway',        Gh0 = (6.45e-8)/(2*pi); V = 33;
+        case 'Concrete motorway',      Gh0 = (2.14e-7)/(2*pi); V = 33;
+        case 'Good road',              Gh0 = (3.0e-7) /(2*pi); V = 30;
+        case 'Smooth highway',         Gh0 = (4.8e-7) /(2*pi); V = 30;
+        case 'Average road',           Gh0 = (2.0e-6) /(2*pi); V = 25;
+        case 'Minor road',             Gh0 = (4.39e-6)/(2*pi); V = 20;
+        case 'Highway with gravel',    Gh0 = (4.4e-6) /(2*pi); V = 18;
+        case 'Poor road',              Gh0 = (1.5e-5) /(2*pi); V = 15;
+        case 'Very rough unmade road', Gh0 = (5.17e-5)/(2*pi); V = 10;
+        case 'Pasture',                        Gh0 = (1.2e-5) /(2*pi); V = 12;
+        case 'Cross country medium roughness', Gh0 = (3.16e-5)/(2*pi); V = 8;
+        case 'Grassland',                      Gh0 = (4.98e-5)/(2*pi); V = 8;
+        case 'Rocky Soil',                     Gh0 = (2.34e-4)/(2*pi); V = 5;
+        case 'Cross country severe',           Gh0 = (3.6e-4) /(2*pi); V = 4;
+        case 'Random Test Course', Gh0 = (3.44e-4)/(2*pi); V = 8;
+        case 'Rocky Test Course',  Gh0 = (1.01e-3)/(2*pi); V = 5;
+        otherwise
+            error('Unknown road type: "%s"', road_type);
+    end
+end
+
+function [ms, mu, bs, ks, kt, bt] = get_vehicle_params(params)
+    switch params
+        case 'bd'
+            ms = 300; mu = 60;  bs = 1000; ks = 16000;  kt = 190000; bt = 0;
+        case 'nom'
+            ms = 240; mu = 36;  bs = 1000; ks = 16000;  kt = 160000; bt = 0;
+        case 'suv'
+            ms = 600; mu = 60;  bs = 3000; ks = 20000;  kt = 180000; bt = 0;
+        case 'truck'
+            ms = 4000; mu = 200; bs = 8000; ks = 150000; kt = 800000; bt = 0;
+        case 'sunlusoy'
+            ms = 250; mu = 35;  bs = 800;  ks = 15000;  kt = 120000; bt = 0;
+        otherwise
+            error('Unknown params: "%s"', params);
+    end
+end
+
+function aw_rms = iso2631_wk_rms(a, fs)
+% ISO 2631-1 Wk frequency-weighted RMS of vertical acceleration.
+%   a  : acceleration time history [m/s^2]
+%   fs : sampling rate [Hz]
+% Verified against ISO 8041 reference Wk magnitudes (<0.3% error, 0.5-20 Hz).
+
+    % --- input guards (this is what was giving you NaN) ---
+    if ~isscalar(fs) || ~isfinite(fs) || fs <= 0
+        error('fs must be a positive finite scalar. Got: %s', mat2str(fs));
+    end
+    a = a(:);
+    if any(~isfinite(a))
+        error('Input acceleration contains NaN/Inf at %d samples.', sum(~isfinite(a)));
+    end
+
+    % --- Wk parameters (ISO 2631-1:1997) ---
+    f1=0.4;  Q1=0.71;   f2=100; Q2=0.71;      % band limiting
+    f3=12.5; f4=12.5; Q4=0.63;                % a-v transition
+    f5=2.37; Q5=0.91; f6=3.35; Q6=0.91;       % upward step
+    w1=2*pi*f1; w2=2*pi*f2; w3=2*pi*f3; w4=2*pi*f4; w5=2*pi*f5; w6=2*pi*f6;
+
+    % --- continuous biquads {num, den}; note the 0.5 in the step section ---
+    Hh = {[1 0 0],                 [1 w1/Q1 w1^2]};
+    Hl = {[0 0 w2^2],              [1 w2/Q2 w2^2]};
+    Ht = {[0 w4^2/w3 w4^2],        [1 w4/Q4 w4^2]};
+    Hs = {[0.5/w5^2 0.5/(Q5*w5) 0.5], [1/w6^2 1/(Q6*w6) 1]};   % <-- 0.5 fix
+    sections = {Hh, Hl, Ht, Hs};
+
+    aw = a;
+    for k = 1:numel(sections)
+        [b, ad] = bilinear_biquad(sections{k}{1}, sections{k}{2}, fs);
+        aw = filter(b, ad, aw);
+    end
+    aw_rms = sqrt(mean(aw.^2));
+end
+
+function [B, A] = bilinear_biquad(num, den, fs)
+    K = 2*fs;
+    b2=num(1); b1=num(2); b0=num(3);
+    a2=den(1); a1=den(2); a0=den(3);
+    B = [ b2*K^2 + b1*K + b0,  -2*b2*K^2 + 2*b0,   b2*K^2 - b1*K + b0];
+    A = [ a2*K^2 + a1*K + a0,  -2*a2*K^2 + 2*a0,   a2*K^2 - a1*K + a0];
+    B = B / A(1);
+    A = A / A(1);
+end
+
+function dX = lpv_dynamics(t, X, Ap, Bp, Cp, Dp, Ak, Bk, Ck, Dk, beta_grid, t_road, hsum_road)
+    % 1. Extract Plant State
+    xp = X(1:4);
+    
+    % 2. Calculate Road Input and Beta at current time t
+    r_t = interp1(t_road, hsum_road, t, 'linear', 0);
+    beta_t = get_beta_trajectory(t);
+    
+    % 3. Calculate Interpolation Weights for the 5 controllers
+    weights = zeros(1, 5);
+    for i = 1:5
+        dist = abs(beta_grid(i) - beta_t) / (beta_grid(2) - beta_grid(1));
+        weights(i) = max(0, 1 - dist);
+    end
+    weights = weights / sum(weights); % Normalize
+    
+    % 4. Measure Plant Outputs [sd; ab]
+    y_meas = Cp(1:2, :) * xp + Dp(1:2, 1) * r_t;
+    
+    % 5. Calculate Blended Control Force (u)
+    u_final = 0;
+    idx = 5;
+    xk = cell(1, 5);
+    for i = 1:5
+        xk{i} = X(idx : idx+5); % Extract the 6 states for this controller
+        u_final = u_final + weights(i) * (Ck{i} * xk{i} + Dk{i} * y_meas);
+        idx = idx + 6;
+    end
+    
+    % 6. State Derivatives
+    dX = zeros(34, 1);
+    dX(1:4) = Ap * xp + Bp * [r_t; u_final]; % Plant dynamics
+    
+    % Controller dynamics with Anti-Windup Decay
+    idx = 5;
+    for i = 1:5
+        decay = -20 * (1 - weights(i)) * xk{i}; 
+        dX(idx : idx+5) = Ak{i} * xk{i} + Bk{i} * y_meas + decay;
+        idx = idx + 6;
+    end
+end
+
+function beta = get_beta_trajectory(t)
+    % 0 to 4s: Comfort mode
+    % 4 to 6s: Smooth transition
+    % 6s onwards: Handling mode
+    if t < 4.0
+        beta = 0.05;
+    elseif t >= 4.0 && t <= 6.0
+        phase = (t - 4.0) / 2.0; 
+        beta = 0.05 + 0.90 * 0.5 * (1 - cos(pi * phase));
+    else
+        beta = 0.95;
+    end
+end
