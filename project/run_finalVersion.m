@@ -340,7 +340,7 @@ for i = 1:N_grid
     
     for iter = 1:max_iters
         knob_test = (knob_low + knob_high) / 2;
-        [cl_hinf, K_test, gamma_test] = design_hinf_for_road(road_baseline, 1, 1, knob_test, beta_current);
+        [cl_hinf, K_test, gamma_test, qcar_open] = design_hinf_for_road(road_baseline, 1, 1, knob_test, beta_current);
         
         if isempty(gamma_test) || isnan(gamma_test) || isinf(gamma_test)
             knob_high = knob_test; continue;
@@ -360,7 +360,12 @@ for i = 1:N_grid
     optimal_knobs(i) = best_knob;
     gammas(i) = gamma_test;
     cl_hinf_(:,:,i)= cl_hinf;
+    % K_grid = cell(1,N_grid);
+    % ...after the bisection settles on best_K_c:
+    K_grid{i} = best_K_c;
+    qcar_open_grid{i} = qcar_open;   % same for every i, but harmless to store
 end
+%%
 % gh0 to beta mapping
 road_test = 'Type C';
 u0 = get_speed_for_road(road_test);
@@ -393,7 +398,20 @@ disp(beta_grid(idx_max));
 mul1 = (beta_grid(idx_max)-beta_mapped)/(beta_grid(idx_max)-beta_grid(idx_min));
 mul2 = (-beta_grid(idx_min)+beta_mapped)/(beta_grid(idx_max)-beta_grid(idx_min));
 cl_hinf_lower = cl_hinf_(:,:,idx_min); cl_hinf_higher = cl_hinf_(:,:,idx_max);
-cl_hinf_lpv = mul2*cl_hinf_lower + mul2*cl_hinf_higher;
+
+cl_hinf_lpv = mul1*cl_hinf_lower + mul2*cl_hinf_higher;
+
+qcar_open = qcar_open_grid{1};        % one plant, not an array
+
+Klo = K_grid{idx_min};
+Khi = K_grid{idx_max};
+Kblend = mul1*Klo + mul2*Khi;
+Kblend.u = ["sd","ab"];
+Kblend.y = "u";
+
+Act = tf(1,[1/60 1]);  Act.u = "u";  Act.y = "fs";
+
+cl_blend = connect(qcar_open, Act, Kblend, "r", ["ab";"sd";"xb";"td"]);
 
 road_compare = 'Type C';
 u0_ = get_speed_for_road(road_compare);
@@ -406,18 +424,18 @@ r_dot_iso_compare = [diff(hsum_)./dt_, 0];
 [y_ab_ol, ~]     = lsim(quartercar('body acceleration','r_dot'), r_dot_iso_compare, t_);
 [y_ab_hinf_lower, ~]  = lsim(cl_hinf_lower('ab','r'), r_iso_compare, t_);
 [y_ab_hinf_higher, ~]  = lsim(cl_hinf_higher('ab','r'), r_iso_compare, t_);
-[y_ab_hinf_lpv, ~]  = lsim(cl_hinf_lpv('ab','r'), r_iso_compare, t_);
+[y_ab_hinf_lpv, ~]  = lsim(cl_blend('ab','r'), r_iso_compare, t_);
 
 [y_rs_ol, ~]     = lsim(quartercar('rattle space','r_dot'), r_dot_iso_compare, t_);
 [y_rs_hinf_lower, ~]  = lsim(cl_hinf_lower('sd','r'), r_iso_compare, t_);
 [y_rs_hinf_higher, ~]  = lsim(cl_hinf_higher('sd','r'), r_iso_compare, t_);
-[y_rs_hinf_lpv, ~]  = lsim(cl_hinf_lpv('sd','r'), r_iso_compare, t_);
+[y_rs_hinf_lpv, ~]  = lsim(cl_blend('sd','r'), r_iso_compare, t_);
 
 % TIRE DEFLECTION SİMS:
 [y_td_ol, ~]     = lsim(quartercar('tire deflection','r_dot'), r_dot_iso_compare, t_);
 [y_td_hinf_lower, ~]  = lsim(cl_hinf_lower('td','r'), r_iso_compare, t_);
 [y_td_hinf_higher, ~]  = lsim(cl_hinf_higher('td','r'), r_iso_compare, t_);
-[y_td_hinf_lpv, ~]  = lsim(cl_hinf_lpv('td','r'), r_iso_compare, t_);
+[y_td_hinf_lpv, ~]  = lsim(cl_blend('td','r'), r_iso_compare, t_);
 
 figure(11); clf;
 subplot(3,1,1);
@@ -482,201 +500,228 @@ fprintf('Open-Loop: %.4f\n', rms(y_rs_ol)*100);
 fprintf('K_lower:       %.4f\n', rms(y_rs_hinf_lower)*100);
 fprintf('K_higher:       %.4f\n', rms(y_rs_hinf_higher)*100);
 fprintf('K_lpv:       %.4f\n\n', rms(y_rs_hinf_lpv)*100);
-%% AUTOMATED LPV SYNTHESIS & STABLE CANONICAL BLENDING
-disp('--- Starting Automated Gamma-Targeting Synthesis ---');
+%% LPV + H-infinity active suspension via gain-scheduled synthesis (hinfgs)
+% ------------------------------------------------------------------------
+% Instead of synthesising N independent H-inf controllers and blending them
+% (which gave unstable blends), we solve ONE gain-scheduled H-inf problem
+% over the whole beta range. hinfgs returns a polytopic controller whose
+% convex interpolation is certified stable for every admissible beta(t) by a
+% single quadratic Lyapunov function.
+%
+% Requires: Robust Control Toolbox (hinfgs, psys, ltisys, ltiss, psinfo)
+%           + your helpers roadprofile_fun, get_speed_for_road,
+%           get_vehicle_params on the path.
+%
+% THREE LEGACY-API SPOTS TO SANITY-CHECK against `doc` if anything errors:
+%   (1) hinfgs needs the AFFINE pvec form (psys(pv,[s0 s1])), not polytopic.
+%   (2) the derivative term s1's E argument must be SCALAR 0 (not zeros(n)),
+%       else hinfgs reports "Not available when the E matrix varies".
+%   (3) hinfgs(pdP,[NMEAS NCON]) -> here [2 1]  (2 measurements, 1 control).
+%       Vertex order from psinfo/ltiss should match box corners [0,1]; if beta
+%       runs backwards in the stability sweep, swap Av/Bv/Cv/Dv{1} and {2}.
+% ------------------------------------------------------------------------
 
-% 1. Define the Scheduling Parameter Grid
-N_grid = 5; 
-beta_grid = linspace(0.05, 0.95, N_grid);
+% ---- user knobs -------------------------------------------------------
+params        = 'nom';      % vehicle parameter set (get_vehicle_params)
+road_baseline = 'Type C';   % road used to shape the synthesis weights
+road_sim      = 'Type C';   % road used for the time simulation
+knob          = 1.0;        % single fixed weight scale (push down for lower gamma)
 
-% 2. Setup the Target Gamma and Bisection Parameters
-target_gamma = 0.95;   
-gamma_tol    = 0.05;   
-max_iters    = 15;     
+% ---- physical plant (displacement-input) + actuator -------------------
+[ms,mu,bs,ks,kt,bt] = get_vehicle_params(params);
 
-% Pre-allocate storage for our controller matrices
-Ak = cell(1, N_grid); Bk = cell(1, N_grid);
-Ck = cell(1, N_grid); Dk = cell(1, N_grid);
-optimal_knobs = zeros(1, N_grid);
+Ap = [ 0 1 0 0; ...
+       [-ks -bs ks bs]/ms; ...
+       0 0 0 1; ...
+       [ks bs -ks-kt -bs]/mu];
+Bp = [ 0 0; 0 1e3/ms; 0 0; [kt -1e3]/mu];
+Cp = [1 0 0 0; 1 0 -1 0; Ap(2,:); 0 0 1 0];
+Dp = [0 0; 0 0; Bp(2,:); -1 0];
 
-% Define execution sampling time (200 Hz digital ECU standard)
-Ts = 0.005; 
+qcar_open = ss(Ap,Bp,Cp,Dp);
+qcar_open.InputName  = ["r";"fs"];
+qcar_open.OutputName = ["xb";"sd";"ab";"td"];
 
-for i = 1:N_grid
-    beta_current = beta_grid(i);
-    fprintf('Tuning Controller %d/%d for beta = %.2f...\n', i, N_grid, beta_current);
-    
-    knob_low = 0.01; knob_high = 20.0;
-    best_K_c = []; best_knob = 1;
-    
-    for iter = 1:max_iters
-        knob_test = (knob_low + knob_high) / 2;
-        [~, K_test, gamma_test] = design_hinf_for_road('Type C', 1, 1, knob_test, beta_current);
-        
-        if isempty(gamma_test) || isnan(gamma_test) || isinf(gamma_test)
-            knob_high = knob_test; continue;
-        end
-        
-        best_K_c = K_test; best_knob = knob_test;
-        
-        if abs(gamma_test - target_gamma) <= gamma_tol
-            break;
-        end
-        if gamma_test > target_gamma
-            knob_high = knob_test;
-        else
-            knob_low = knob_test;
-        end
-    end
-    optimal_knobs(i) = best_knob;
-    
-    % Clean up numerical tracking states
-    K_clean = minreal(best_K_c);
-    
-    % CRITICAL FIX 1: Force all controllers into a Modal Canonical Form.
-    % This aligns their internal state bases so they can be blended safely!
-    [Am, Bm, Cm, Dm] = ssdata(K_clean);
-    K_modal = canon(ss(Am, Bm, Cm, Dm), 'modal');
-    
-    % Discretize cleanly using Zero-Order Hold
-    K_d = c2d(K_modal, Ts, 'zoh');
-    [Ak{i}, Bk{i}, Ck{i}, Dk{i}] = ssdata(K_d);
+Act = ss(tf(1,[1/60 1]));            % actuator u -> fs (strictly proper)
+[Aa,Ba,Ca,Da] = ssdata(Act);         % Da = 0 -> no algebraic loop
+
+% ---- build the generalised plant at a NOMINAL beta, then go affine ----
+% qcaric(beta) is affine: only regulated rows e2 (~ (1-beta)) and e4 (~ beta)
+% depend on beta. Build it ONCE at beta = 0.5 so P0 and P1 share one basis.
+beta_nom = 0.5;
+qcaric = build_qcaric(qcar_open, road_baseline, params, knob, beta_nom);
+
+[Am,Bm,Cm,Dm] = ssdata(ss(qcaric));
+n = size(Am,1);
+
+% rows of ICoutputs = [e1;e2;e3;e4;y1;y2] -> e2 is row 2, e4 is row 4.
+% "unit" coefficient rows (value at beta=0.5 divided by 0.5):
+Ce2 = Cm(2,:)/beta_nom;   De2 = Dm(2,:)/beta_nom;
+Ce4 = Cm(4,:)/beta_nom;   De4 = Dm(4,:)/beta_nom;
+
+% P0 = value at beta = 0  : e2 at full weight, e4 = 0
+C0 = Cm; D0 = Dm;
+C0(2,:) = Ce2;  D0(2,:) = De2;
+C0(4,:) = 0;    D0(4,:) = 0;
+
+% P1 = d/dbeta            : e2 -> -unit, e4 -> +unit, all else 0
+C1 = zeros(size(Cm)); D1 = zeros(size(Dm));
+C1(2,:) = -Ce2; D1(2,:) = -De2;
+C1(4,:) =  Ce4; D1(4,:) =  De4;
+
+% Affine parameter-dependent form (this is what hinfgs expects: it schedules
+% via psinfo(pdP,'par')/polydec on the plant's pvec). Only C,D depend on beta;
+% A,B,E are constant. The derivative term s1 MUST pass a SCALAR 0 as its E
+% argument -- a zero *matrix* flags a descriptor system and makes hinfgs think
+% E varies ("Not available when the E matrix varies").
+s0 = ltisys(Am, Bm, C0,      D0);                    % E0 = I (default)
+s1 = ltisys(zeros(n), zeros(size(Bm)), C1, D1, 0);   % E1 = 0 via scalar 0
+pv  = pvec('box', [0 1]);
+pdP = psys(pv, [s0 s1]);                              % affine, constant E = I
+
+% ---- gain-scheduled H-infinity synthesis ------------------------------
+[gopt, pdK] = hinfgs(pdP, [2 1]);     % 2 measurements, 1 control
+fprintf('hinfgs guaranteed gamma over beta in [0,1]: %.4f\n', gopt);
+
+% pull out the vertex controllers (one per box vertex: beta=0 and beta=1)
+[~, nv, nsK] = psinfo(pdK);
+Av = cell(1,nv); Bv = cell(1,nv); Cv = cell(1,nv); Dv = cell(1,nv);
+for j = 1:nv
+    [Av{j},Bv{j},Cv{j},Dv{j}] = ltiss(psinfo(pdK,'sys',j));
 end
-disp('All controllers tuned and canonical-aligned!');
+fprintf('controller order = %d, vertices = %d\n', nsK, nv);
 
-%% PART 1: PURE BASELINE TEST (No road blend, using bulletproof lsim)
-disp('--- Part 1: Simulating Frozen Comfort Controller on Type C ---');
+% ---- stability check across beta (this is what failed before) ---------
+fprintf('\n--- frozen closed-loop stability sweep ---\n');
+for b = 0:0.1:1
+    Acl = closed_loop_A(b, Av,Bv,Cv,Dv, Ap,Bp,Cp,Dp, Aa,Ba,Ca);
+    fprintf('beta=%.1f : stable=%d , max Re(pole)=%8.3f\n', ...
+            b, all(real(eig(Acl))<0), max(real(eig(Acl))));
+end
 
-% Extract the closed-loop system for beta = 0.05 (Comfort baseline)
-[cl_baseline, ~, ~, ~] = design_hinf_for_road('Type C', 1, 1, optimal_knobs(1), 0.05);
+% ---- road for the time simulation -------------------------------------
+u0 = get_speed_for_road(road_sim);
+[~, t_road, hsum, ~] = roadprofile_fun(road_sim, u0);
+r_road = hsum(1:numel(t_road));            % road displacement [m]
 
-% Generate continuous Type C road profile
-u0_c = get_speed_for_road('Type C');
-[~, t_c, hsum_c] = roadprofile_fun('Type C', u0_c);
-T_end = min(10, max(t_c));
-t_sim = (0:Ts:T_end)';
-r_dist_c = interp1(t_c, hsum_c, t_sim, 'spline', 0);
+% ---- LPV time simulation: beta(t) actually varies ---------------------
+nx = 4 + size(Aa,1) + nsK;                 % plant + actuator + controller
+X0 = zeros(nx,1);
+odef = @(t,X) lpv_rhs(t, X, Av,Bv,Cv,Dv, ...
+                      Ap,Bp,Cp,Dp, Aa,Ba,Ca, t_road, r_road);
+opts = odeset('RelTol',1e-6,'AbsTol',1e-8,'MaxStep',1e-3);
+[tt, XX] = ode45(odef, [t_road(1) t_road(end)], X0, opts);
 
-% Run baseline LTI simulation via native lsim
-[y_baseline, ~] = lsim(cl_baseline({'ab','sd','td'}, 'r'), r_dist_c, t_sim);
+% reconstruct outputs (ab, sd, td) and beta(t)
+ab = zeros(size(tt)); sd = ab; td = ab; bb = ab;
+for k = 1:numel(tt)
+    xp = XX(k,1:4).'; xa = XX(k,5:4+size(Aa,1)).';
+    fs = Ca*xa;
+    sd(k) = Cp(2,:)*xp;
+    ab(k) = Cp(3,:)*xp + Dp(3,2)*fs;
+    r_k   = interp1(t_road, r_road, tt(k), 'linear', 0);
+    td(k) = Cp(4,:)*xp - r_k;
+    bb(k) = beta_of_t(tt(k));
+end
 
-figure(9); clf;
-subplot(3,1,1); plot(t_sim, y_baseline(:,1), 'r'); title('Baseline Comfort: Body Acceleration'); ylabel('m/s^2'); grid on;
-subplot(3,1,2); plot(t_sim, y_baseline(:,2)*100, 'g'); title('Baseline Comfort: Suspension Deflection'); ylabel('cm'); grid on;
-subplot(3,1,3); plot(t_sim, y_baseline(:,3)*100, 'b'); title('Baseline Comfort: Tire Deflection'); ylabel('cm'); xlabel('Time (s)'); grid on;
+fprintf('\n--- LPV closed-loop RMS (road %s) ---\n', road_sim);
+fprintf('body accel : %.4f m/s^2\n', rms(ab));
+fprintf('susp defl  : %.4f cm\n',   rms(sd)*100);
+fprintf('tire defl  : %.4f cm\n',   rms(td)*100);
 
-%% PART 2: IMPLEMENTING ROAD ROUGHNESS MAPPING & SMOOTH LPV BLENDING
-disp('--- Part 2: Running Matrix-Blended LPV Simulation ---');
+% ---- plots ------------------------------------------------------------
+figure; clf;
+subplot(4,1,1); plot(tt,ab,'k'); grid on; ylabel('a_b [m/s^2]');
+title('LPV+H_\infty active suspension, scheduled on \beta(t)');
+subplot(4,1,2); plot(tt,sd*100,'k'); grid on; ylabel('sd [cm]');
+subplot(4,1,3); plot(tt,td*100,'k'); grid on; ylabel('td [cm]');
+subplot(4,1,4); plot(tt,bb,'r','LineWidth',1.2); grid on;
+ylabel('\beta(t)'); xlabel('time [s]'); ylim([-0.05 1.05]);
 
-% Define the physical road profile containing varying roughness segments
-% For a real test, let's look at Type D (Rough road)
-road_compare = 'Type D'; 
-u0_lpv = get_speed_for_road(road_compare);
-[~, t_road, hsum_road, Gh0_nominal] = roadprofile_fun(road_compare, u0_lpv);
-r_dist = interp1(t_road, hsum_road, t_sim, 'spline', 0);
-N_t = length(t_sim);
+% ======================== local functions =============================
+function qcaric = build_qcaric(qcar_open, road_type, params, knob, beta)
+% Reproduces your design_hinf_for_road weighting, parameterised by beta.
+    u0 = get_speed_for_road(road_type); V = u0;
+    [~, ~, ~, Gh0] = roadprofile_fun(road_type, u0);
+    [ms,mu,bs,ks,kt,~] = get_vehicle_params(params); %#ok<ASGLU>
 
-% Calculate the raw derivative of the road profile to estimate live roughness
-dt = Ts;
-rdot_dist = [diff(r_dist)/dt; 0];
+    w_bounce    = sqrt(ks/ms);
+    w_wheel_hop = sqrt(kt/mu);
+    w_break     = max(10*(V/33), w_wheel_hop*1.5);
 
-% Setup Logarithmic Mapping bounds (ISO Class A to Class F bounds)
-Gh0_min = 1e-6;   % Class A lower bound
-Gh0_max = 1024e-6; % Class F upper bound
+    Act = tf(1,[1/60 1]);              Act.u = "u";  Act.y = "fs";
+    Wroad = tf(sqrt(Gh0*V)*w_break, [1 w_break]); Wroad.u="d1"; Wroad.y="r";
+    Wact  = 0.1*tf([1 w_bounce],[1 100]);          Wact.u ="u";  Wact.y ="e1";
+    Wd2 = ss(0.01); Wd2.u="d2"; Wd2.y="Wd2";
+    Wd3 = ss(0.01); Wd3.u="d3"; Wd3.y="Wd3";
 
-beta_traj = zeros(N_t, 1);
-window_size = 100; % 0.5 second smoothing window
-rdot_buffer = zeros(window_size, 1);
+    Wsd = knob              * tf(1,[1/w_bounce 1]);                    Wsd.u="sd"; Wsd.y="e3";
+    Wab = knob*(1-beta)     * tf(1, conv([1/w_bounce 1],[1/w_bounce 1])); Wab.u="ab"; Wab.y="e2";
+    Wtd = knob*beta         * tf(1,[1/w_wheel_hop 1]);                 Wtd.u="td"; Wtd.y="e4";
 
-% Extract separate discrete plant matrices to secure tracking loop index mapping
-% inputs: [r_dot; fs], outputs: [ab; sd; td]
-[ms_p, mu_p, bs_p, ks_p, kt_p, bt_p] = get_vehicle_params('nom');
-Ap_c = [0, 1, 0, -1; -ks_p/ms_p, -bs_p/ms_p, 0, bs_p/ms_p; 0, 0, 0, 1; ks_p/mu_p, bs_p/mu_p, -kt_p/mu_p, -(bs_p+bt_p)/mu_p];
-Bp_c = [0, 0; 0, 1/ms_p; -1, 0; 0, -1/mu_p]; % Input 1: r_dot, Input 2: fs
-Cp_c = [Ap_c(2,:); 1, 0, 0, 0; 0, 0, 1, 0];
-Dp_c = [0, 1/ms_p; 0, 0; 0, 0];
+    sdmeas = sumblk("y1 = sd + Wd2");
+    abmeas = sumblk("y2 = ab + Wd3");
+    ICin   = ["d1";"d2";"d3";"u"];
+    ICout  = ["e1";"e2";"e3";"e4";"y1";"y2"];
 
-Plant_Discrete = c2d(ss(Ap_c, Bp_c, Cp_c, Dp_c), Ts, 'zoh');
-[Ap, Bp, Cp, Dp] = ssdata(Plant_Discrete);
+    qcaric = connect(qcar_open(["sd","ab","td"],:), Act, Wroad, Wact, ...
+                     Wab, Wsd, Wtd, Wd2, Wd3, sdmeas, abmeas, ICin, ICout);
+end
 
-% Initialize unified simulation states
-xp = zeros(4, 1);               % 4 physical vehicle states
-xk = zeros(size(Ak{1}, 1), 1);  % 1 unified controller state vector (Guarantees smooth transfer!)
-y_lpv = zeros(N_t, 3);          % Output array
+function [Ak,Bk,Ck,Dk] = Kof(beta, Av,Bv,Cv,Dv)
+% Interpolate the two vertex controllers. Vertices are ordered [beta=0, beta=1]
+% (same order as sv0,sv1 in psys), so the convex weights are [1-beta, beta].
+    c = [1-beta, beta];
+    Ak = zeros(size(Av{1})); Bk = zeros(size(Bv{1}));
+    Ck = zeros(size(Cv{1})); Dk = zeros(size(Dv{1}));
+    for j = 1:numel(Av)
+        Ak = Ak + c(j)*Av{j};  Bk = Bk + c(j)*Bv{j};
+        Ck = Ck + c(j)*Cv{j};  Dk = Dk + c(j)*Dv{j};
+    end
+end
 
-for k = 1:N_t
-    % --- Step A: Live Road Roughness Parameter Extraction & Mapping ---
-    rdot_buffer = [rdot_buffer(2:end); rdot_dist(k)];
-    if k > window_size
-        % Estimate the live power spectral density parameter from velocity variance
-        estimated_Gh0 = (var(rdot_buffer) * Ts) / (2 * pi * u0_lpv);
-        estimated_Gh0 = max(Gh0_min, min(Gh0_max, estimated_Gh0));
-        
-        % Logarithmic mapping of road parameters directly onto beta
-        raw_beta = 0.05 + 0.90 * (log10(estimated_Gh0) - log10(Gh0_min)) / (log10(Gh0_max) - log10(Gh0_min));
-        beta_traj(k) = max(0.05, min(0.95, raw_beta));
+function Acl = closed_loop_A(beta, Av,Bv,Cv,Dv, Ap,Bp,Cp,Dp, Aa,Ba,Ca)
+% Frozen closed-loop A for [xp; xa; xk] with road set to zero.
+    [Ak,Bk,Ck,Dk] = Kof(beta, Av,Bv,Cv,Dv);
+    na = size(Aa,1); nk = size(Ak,1);
+    Cym = [Cp(2,:); Cp(3,:)];              % measurements [sd; ab] from plant states
+    Dyf = [zeros(1,na); Dp(3,2)*Ca];       % ab feedthrough from fs (= Ca*xa)
+    Bf  = Bp(:,2)*Ca;                      % fs path into the plant (4 x na)
+    Acl = [ Ap,            Bf,                 zeros(4,nk);
+            Ba*Dk*Cym,     Aa + Ba*Dk*Dyf,     Ba*Ck;
+            Bk*Cym,        Bk*Dyf,             Ak ];
+end
+
+function dX = lpv_rhs(t, X, Av,Bv,Cv,Dv, Ap,Bp,Cp,Dp, Aa,Ba,Ca, t_road, r_road)
+    na = size(Aa,1);  nk = size(Av{1},1);
+    xp = X(1:4);  xa = X(5:4+na);  xk = X(4+na+1:4+na+nk);
+
+    r  = interp1(t_road, r_road, t, 'linear', 0);
+    fs = Ca*xa;
+
+    sd = Cp(2,:)*xp;
+    ab = Cp(3,:)*xp + Dp(3,2)*fs;
+    y  = [sd; ab];
+
+    [Ak,Bk,Ck,Dk] = Kof(beta_of_t(t), Av,Bv,Cv,Dv);
+    u  = Ck*xk + Dk*y;
+
+    dxp = Ap*xp + Bp*[r; fs];
+    dxa = Aa*xa + Ba*u;
+    dxk = Ak*xk + Bk*y;
+    dX  = [dxp; dxa; dxk];
+end
+
+function beta = beta_of_t(t)
+% Scheduling trajectory: comfort -> (smooth) -> handling.
+    if t < 4
+        beta = 0.05;
+    elseif t <= 6
+        beta = 0.05 + 0.90*0.5*(1 - cos(pi*(t-4)/2));
     else
-        beta_traj(k) = 0.50; % Default to balanced configuration during buffer warmup
+        beta = 0.95;
     end
-    
-    % --- Step B: Calculate Interpolation Weights ---
-    weights = zeros(1, N_grid);
-    for i = 1:N_grid
-        dist = abs(beta_grid(i) - beta_traj(k)) / (beta_grid(2) - beta_grid(1));
-        weights(i) = max(0, 1 - dist);
-    end
-    weights = weights / sum(weights);
-    
-    % --- Step C: Interp Controller Matrices (Guarantees perfect state continuity) ---
-    Ak_b = zeros(size(Ak{1})); Bk_b = zeros(size(Bk{1}));
-    Ck_b = zeros(size(Ck{1})); Dk_b = zeros(size(Dk{1}));
-    for i = 1:N_grid
-        if weights(i) > 0
-            Ak_b = Ak_b + weights(i) * Ak{i};
-            Bk_b = Bk_b + weights(i) * Bk{i};
-            Ck_b = Ck_b + weights(i) * Ck{i};
-            Dk_b = Dk_b + weights(i) * Dk{i};
-        end
-    end
-    
-    % --- Step D: Measure Sensors & Extract Control Effort ---
-    % Inputs expected by H-infinity controller: [sd; ab]
-    y_plant = Cp * xp + Dp(:, 1) * rdot_dist(k); 
-    y_meas = [y_plant(2); y_plant(1)]; % Read [sd; ab] safely
-    
-    % Track current state values
-    y_lpv(k, :) = y_plant';
-    
-    % Compute control force using the unified continuous state vector
-    u_force = Ck_b * xk + Dk_b * y_meas;
-    
-    % --- Step E: Propagate state space arrays to k+1 ---
-    xk = Ak_b * xk + Bk_b * y_meas;
-    xp = Ap * xp + Bp * [rdot_dist(k); u_force];
 end
-disp('Simulation executed cleanly with 100% numerical stability!');
-
-% 8. Plotting the Adaptive LPV Dashboard
-figure(10); clf;
-subplot(4,1,1);
-plot(t_sim, beta_traj, 'k', 'LineWidth', 2);
-title('Live Parameter Mapping: \beta (Dynamically updated via Logarithmic Road Roughness)');
-ylabel('\beta'); grid on; ylim([0 1]);
-
-subplot(4,1,2);
-plot(t_sim, y_lpv(:,1), 'b'); 
-title('LPV Active Suspension: Body Acceleration');
-ylabel('m/s^2'); grid on;
-
-subplot(4,1,3);
-plot(t_sim, y_lpv(:,3)*100, 'g'); 
-title('LPV Active Suspension: Tire Deflection');
-ylabel('cm'); grid on;
-
-subplot(4,1,4);
-plot(t_sim, r_dist*100, 'Color', [0.5 0.5 0.5]);
-title(sprintf('Continuous Road Profile Input Profile (%s)', road_compare));
-ylabel('cm'); xlabel('Time (s)'); grid on;
 %% helpers
 function [cl_hinf, K, gamma_out, qcar_open, info, rdot_iso, r_iso] = design_hinf_for_road(road_type, rms_a_ref, rms_rs_ref, knob, beta, params)
     if nargin < 6 || isempty(params)
